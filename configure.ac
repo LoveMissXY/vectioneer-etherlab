@@ -650,8 +650,8 @@ AC_SUBST(KERNEL_R8152,[$kernel_r8152])
 
 AC_MSG_CHECKING([whether to build the CCAT driver])
 
-AC_ARG_ENABLE([ccat],
-    AS_HELP_STRING([--enable-ccat],
+AC_ARG_ENABLE([ccat_netdev],
+    AS_HELP_STRING([--enable-ccat_netdev],
                    [Enable CCAT driver]),
     [
         case "${enableval}" in
@@ -659,7 +659,7 @@ AC_ARG_ENABLE([ccat],
                 ;;
             no) enableccat=0
                 ;;
-            *) AC_MSG_ERROR([Invalid value for --enable-ccat])
+            *) AC_MSG_ERROR([Invalid value for --enable-ccat_netdev])
                 ;;
         esac
     ],

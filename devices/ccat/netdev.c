@@ -33,6 +33,11 @@
 
 #include "module.h"
 
+MODULE_DESCRIPTION(DRV_DESCRIPTION);
+MODULE_AUTHOR("Patrick Bruenn <p.bruenn@beckhoff.com>");
+MODULE_LICENSE("GPL");
+MODULE_VERSION(DRV_VERSION);
+
 /**
  * EtherCAT frame to enable forwarding on EtherCAT Terminals
  */
@@ -249,9 +254,11 @@ struct ccat_mac_register {
 	u8 mii_connected;
 };
 
+static void ccat_eth_fifo_reset(struct ccat_eth_fifo *const fifo);
 static void fifo_set_end(struct ccat_eth_fifo *const fifo, size_t size)
 {
 	fifo->end = fifo->mem.start + size - sizeof(struct ccat_eth_frame);
+	ccat_eth_fifo_reset(fifo);
 }
 
 static void ccat_dma_free(struct ccat_eth_priv *const priv)
@@ -565,6 +572,7 @@ static int ccat_eth_priv_init_dma(struct ccat_eth_priv *priv)
 		ccat_dma_free(priv);
 		return status;
 	}
+
 	return ccat_hw_disable_mac_filter(priv);
 }
 
@@ -803,7 +811,8 @@ static enum hrtimer_restart poll_timer_callback(struct hrtimer *timer)
 static struct rtnl_link_stats64 *ccat_eth_get_stats64(struct net_device *dev, struct rtnl_link_stats64
 						      *storage)
 #else
-static void ccat_eth_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *storage)
+static void ccat_eth_get_stats64(struct net_device *dev,
+				 struct rtnl_link_stats64 *storage)
 #endif
 {
 	struct ccat_eth_priv *const priv = netdev_priv(dev);
@@ -953,9 +962,10 @@ static int ccat_eth_init_netdev(struct ccat_eth_priv *priv)
 	return 0;
 }
 
-static int ccat_eth_dma_probe(struct ccat_function *func)
+static int ccat_eth_dma_probe(struct platform_device *pdev)
 {
-	struct ccat_eth_priv *priv = ccat_eth_alloc_netdev(func);
+	struct ccat_function *const func = pdev->dev.platform_data;
+	struct ccat_eth_priv *const priv = ccat_eth_alloc_netdev(func);
 	int status;
 
 	if (!priv)
@@ -970,23 +980,26 @@ static int ccat_eth_dma_probe(struct ccat_function *func)
 	return ccat_eth_init_netdev(priv);
 }
 
-static void ccat_eth_dma_remove(struct ccat_function *func)
+static int ccat_eth_dma_remove(struct platform_device *pdev)
 {
+	struct ccat_function *const func = pdev->dev.platform_data;
 	struct ccat_eth_priv *const eth = func->private_data;
 	eth->unregister(eth->netdev);
 	ccat_eth_priv_free(eth);
 	free_netdev(eth->netdev);
+	return 0;
 }
 
-const struct ccat_driver eth_dma_driver = {
-	.type = CCATINFO_ETHERCAT_MASTER_DMA,
+static struct platform_driver ccat_eth_dma_driver = {
+	.driver = {.name = "ccat_eth_dma"},
 	.probe = ccat_eth_dma_probe,
 	.remove = ccat_eth_dma_remove,
 };
 
-static int ccat_eth_eim_probe(struct ccat_function *func)
+static int ccat_eth_eim_probe(struct platform_device *pdev)
 {
-	struct ccat_eth_priv *priv = ccat_eth_alloc_netdev(func);
+	struct ccat_function *const func = pdev->dev.platform_data;
+	struct ccat_eth_priv *const priv = ccat_eth_alloc_netdev(func);
 	int status;
 
 	if (!priv)
@@ -1001,16 +1014,37 @@ static int ccat_eth_eim_probe(struct ccat_function *func)
 	return ccat_eth_init_netdev(priv);
 }
 
-static void ccat_eth_eim_remove(struct ccat_function *func)
+static int ccat_eth_eim_remove(struct platform_device *pdev)
 {
+	struct ccat_function *const func = pdev->dev.platform_data;
 	struct ccat_eth_priv *const eth = func->private_data;
 	eth->unregister(eth->netdev);
 	ccat_eth_priv_free(eth);
 	free_netdev(eth->netdev);
+	return 0;
 }
 
-const struct ccat_driver eth_eim_driver = {
-	.type = CCATINFO_ETHERCAT_NODMA,
+static struct platform_driver ccat_eth_eim_driver = {
+	.driver = {.name = "ccat_eth_eim"},
 	.probe = ccat_eth_eim_probe,
 	.remove = ccat_eth_eim_remove,
 };
+
+static int __init ccat_eth_init(void)
+{
+	int result;
+	result = platform_driver_register(&ccat_eth_eim_driver);
+	if (result != 0) {
+		return result;
+	}
+	return platform_driver_register(&ccat_eth_dma_driver);
+}
+
+static void __exit ccat_eth_exit(void)
+{
+	platform_driver_unregister(&ccat_eth_eim_driver);
+	platform_driver_unregister(&ccat_eth_dma_driver);
+}
+
+module_init(ccat_eth_init);
+module_exit(ccat_eth_exit);
