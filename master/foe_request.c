@@ -1,8 +1,7 @@
 /******************************************************************************
  *
- *  $Id$
- *
  *  Copyright (C) 2008  Olav Zarges, imc Messsysteme GmbH
+ *  Copyright (C) 2020  Florian Pose, IgH
  *
  *  This file is part of the IgH EtherCAT Master.
  *
@@ -36,6 +35,7 @@
 #include <linux/module.h>
 #include <linux/jiffies.h>
 #include <linux/slab.h>
+#include <linux/vmalloc.h>
 
 #include "foe_request.h"
 
@@ -92,7 +92,7 @@ void ec_foe_request_clear_data(
         )
 {
     if (req->buffer) {
-        kfree(req->buffer);
+        vfree(req->buffer);
         req->buffer = NULL;
     }
 
@@ -120,7 +120,7 @@ int ec_foe_request_alloc(
 
     ec_foe_request_clear_data(req);
 
-    if (!(req->buffer = (uint8_t *) kmalloc(size, GFP_KERNEL))) {
+    if (!(req->buffer = (uint8_t *) vmalloc(size))) {
         EC_ERR("Failed to allocate %zu bytes of FoE memory.\n", size);
         return -ENOMEM;
     }
