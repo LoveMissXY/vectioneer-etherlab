@@ -1,6 +1,6 @@
 /*****************************************************************************
  *
- *  $Id$
+ *  $Id: CommandFoeRead.cpp,v 4f682084c643 2010/10/25 08:12:26 fp $
  *
  *  Copyright (C) 2006-2009  Florian Pose, Ingenieurgemeinschaft IgH
  *
@@ -117,7 +117,7 @@ void CommandFoeRead::execute(const StringVector &args)
     data.buffer_size = 0x8800;
     data.buffer = new uint8_t[data.buffer_size];
 
-    strncpy(data.file_name, args[0].c_str(), sizeof(data.file_name));
+    strncpy(data.file_name, args[0].c_str(), sizeof(data.file_name) - 1);
     data.file_name[sizeof(data.file_name)-1] = 0;
     if (args.size() >= 2) {
         stringstream strPassword;
