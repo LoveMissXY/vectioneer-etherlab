@@ -1,8 +1,6 @@
 /******************************************************************************
  *
- *  $Id$
- *
- *  Copyright (C) 2006-2012  Florian Pose, Ingenieurgemeinschaft IgH
+ *  Copyright (C) 2006-2020  Florian Pose, Ingenieurgemeinschaft IgH
  *
  *  This file is part of the IgH EtherCAT Master.
  *
@@ -47,7 +45,8 @@
 #include <linux/vmalloc.h>
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
-#include <linux/sched/types.h> // struct sched_param
+#include <uapi/linux/sched/types.h> // struct sched_param
+#include <linux/sched/types.h> // sched_setscheduler
 #include <linux/sched/signal.h> // signal_pending
 #endif
 
