@@ -191,6 +191,12 @@
 // Mailbox Gateway
 #define EC_IOCTL_MBOX_GATEWAY         EC_IOWR(0x73, ec_ioctl_mbox_gateway_t)
 
+#define EC_IOCTL_SC_SOE_REQUEST       EC_IOWR(0x80, ec_ioctl_soe_request_t)
+#define EC_IOCTL_SOE_REQUEST_STATE    EC_IOWR(0x81, ec_ioctl_soe_request_t)
+#define EC_IOCTL_SOE_REQUEST_READ     EC_IOWR(0x82, ec_ioctl_soe_request_t)
+#define EC_IOCTL_SOE_REQUEST_WRITE    EC_IOWR(0x83, ec_ioctl_soe_request_t)
+#define EC_IOCTL_SOE_REQUEST_DATA     EC_IOWR(0x84, ec_ioctl_soe_request_t)
+
 /*****************************************************************************/
 
 #define EC_IOCTL_STRING_SIZE 64
@@ -888,6 +894,22 @@ typedef struct {
     size_t buff_size;
     uint8_t *data;
 } ec_ioctl_mbox_gateway_t;
+
+/*****************************************************************************/
+
+typedef struct {
+    // inputs
+    uint32_t config_index;
+
+    // inputs/outputs
+    uint32_t request_index;
+    uint8_t drive_no;
+    uint16_t idn;
+    size_t size;
+    uint8_t *data;
+    /* uint32_t timeout; */
+    ec_request_state_t state;
+} ec_ioctl_soe_request_t;
 
 /*****************************************************************************/
 

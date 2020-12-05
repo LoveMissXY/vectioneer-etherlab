@@ -723,7 +723,7 @@ static ATTRIBUTES int ec_ioctl_pcap_data(
     if (data.data_size > total_size) {
         data.data_size = total_size;
     }
-    
+
     // fill in pcap header and copy to user mem
     pcaphdr.magic_number = 0xa1b2c3d4;
     pcaphdr.version_major = 2;
@@ -737,7 +737,7 @@ static ATTRIBUTES int ec_ioctl_pcap_data(
         ec_lock_up(&master->master_sem);
         return -EFAULT;
     }
-    
+
     // copy pcap data, up to requested size; also copy updated data_size
     if ( (data_size > 0) &&
          (copy_to_user((void __user *) (data.target + sizeof(pcap_hdr_t)),
@@ -746,7 +746,7 @@ static ATTRIBUTES int ec_ioctl_pcap_data(
         ec_lock_up(&master->master_sem);
         return -EFAULT;
     }
-    
+
     // remove copied data?
     // Note: will remove any data that has not been copied
     if (data.reset_data) {
@@ -1834,7 +1834,7 @@ static ATTRIBUTES int ec_ioctl_eoe_handler(
     data.tx_rate = eoe->tx_rate;
     data.tx_queued_frames = ec_eoe_tx_queued_frames(eoe);
     data.tx_queue_size = eoe->tx_ring_count;
-    
+
     EC_MASTER_DBG(master, 1, "EOE %s Info:\n", eoe->dev->name);
     EC_MASTER_DBG(master, 1, "  opened:               %u\n", eoe->opened);
     EC_MASTER_DBG(master, 1, "  rate_jiffies:         %lu\n", eoe->rate_jiffies);
@@ -2792,7 +2792,7 @@ static ATTRIBUTES int ec_ioctl_rt_slave_requests(
     ecrt_master_rt_slave_requests(master, rt_slave_requests);
 
     ec_lock_up(&master->master_sem);
-    
+
 out_return:
     return ret;
 }
@@ -2814,7 +2814,7 @@ static ATTRIBUTES int ec_ioctl_exec_slave_requests(
     }
 
     ecrt_master_exec_slave_requests(master);
-    
+
     return 0;
 }
 
@@ -5339,7 +5339,7 @@ static ATTRIBUTES int ec_ioctl_mbox_gateway(
     if (copy_from_user(&ioctl, (void __user *) arg, sizeof(ioctl))) {
         return -EFAULT;
     }
-    
+
     // ensure the incoming data will be at least the size of the mailbox header
     if (ioctl.data_size < EC_MBOX_HEADER_SIZE) {
         return -EFAULT;
@@ -5360,7 +5360,7 @@ static ATTRIBUTES int ec_ioctl_mbox_gateway(
         kfree(data);
         return -EFAULT;
     }
-    
+
     // send the mailbox packet
     retval = ec_master_mbox_gateway(master, data,
             &ioctl.data_size, ioctl.buff_size);
@@ -5382,6 +5382,222 @@ static ATTRIBUTES int ec_ioctl_mbox_gateway(
 
     EC_MASTER_DBG(master, 1, "Finished Mailbox Gateway request.\n");
     return retval;
+}
+
+/*****************************************************************************/
+
+static ATTRIBUTES int ec_ioctl_sc_create_soe_request(
+        ec_master_t *master, /**< EtherCAT master. */
+        void *arg, /**< ioctl() argument. */
+        ec_ioctl_context_t *ctx /**< Private data structure of file handle. */
+        )
+{
+    ec_ioctl_soe_request_t data;
+    ec_slave_config_t *sc;
+    ec_soe_request_t *req;
+
+    if (unlikely(!ctx->requested))
+        return -EPERM;
+
+    if (copy_from_user(&data, (void __user *) arg, sizeof(data))) {
+        return -EFAULT;
+    }
+
+    data.request_index = 0;
+
+    if (ec_lock_down_interruptible(&master->master_sem))
+        return -EINTR;
+
+    sc = ec_master_get_config(master, data.config_index);
+    if (!sc) {
+        ec_lock_up(&master->master_sem);
+        return -ENOENT;
+    }
+
+    list_for_each_entry(req, &sc->soe_requests, list) {
+        data.request_index++;
+    }
+
+    ec_lock_up(&master->master_sem); /** \todo sc could be invalidated */
+
+    req = ecrt_slave_config_create_soe_request_err(sc, data.drive_no,
+            data.idn, data.size);
+    if (IS_ERR(req))
+        return PTR_ERR(req);
+
+    if (copy_to_user((void __user *) arg, &data, sizeof(data)))
+        return -EFAULT;
+
+    return 0;
+}
+
+/*****************************************************************************/
+
+static ATTRIBUTES int ec_ioctl_soe_request_state(
+        ec_master_t *master, /**< EtherCAT master. */
+        void *arg, /**< ioctl() argument. */
+        ec_ioctl_context_t *ctx /**< Private data structure of file handle. */
+        )
+{
+    ec_ioctl_soe_request_t data;
+    ec_slave_config_t *sc;
+    ec_soe_request_t *req;
+
+    if (unlikely(!ctx->requested))
+        return -EPERM;
+
+    if (copy_from_user(&data, (void __user *) arg, sizeof(data)))
+        return -EFAULT;
+
+    /* no locking of master_sem needed, because neither sc nor req will not be
+     * deleted in the meantime. */
+
+    if (!(sc = ec_master_get_config(master, data.config_index))) {
+        return -ENOENT;
+    }
+
+    if (!(req = ec_slave_config_find_soe_request(sc, data.request_index))) {
+        return -ENOENT;
+    }
+
+    data.state = ecrt_soe_request_state(req);
+    if (data.state == EC_REQUEST_SUCCESS && req->dir == EC_DIR_INPUT)
+        data.size = ecrt_soe_request_data_size(req);
+    else
+        data.size = 0;
+
+    if (copy_to_user((void __user *) arg, &data, sizeof(data)))
+        return -EFAULT;
+
+    return 0;
+}
+
+/*****************************************************************************/
+
+/** Starts an SOE read operation.
+ *
+ * \return Zero on success, otherwise a negative error code.
+ */
+static ATTRIBUTES int ec_ioctl_soe_request_read(
+        ec_master_t *master, /**< EtherCAT master. */
+        void *arg, /**< ioctl() argument. */
+        ec_ioctl_context_t *ctx /**< Private data structure of file handle. */
+        )
+{
+    ec_ioctl_soe_request_t data;
+    ec_slave_config_t *sc;
+    ec_soe_request_t *req;
+
+    if (unlikely(!ctx->requested))
+        return -EPERM;
+
+    if (copy_from_user(&data, (void __user *) arg, sizeof(data)))
+        return -EFAULT;
+
+    /* no locking of master_sem needed, because neither sc nor req will not be
+     * deleted in the meantime. */
+
+    if (!(sc = ec_master_get_config(master, data.config_index))) {
+        return -ENOENT;
+    }
+
+    if (!(req = ec_slave_config_find_soe_request(sc, data.request_index))) {
+        return -ENOENT;
+    }
+
+    ecrt_soe_request_read(req);
+    return 0;
+}
+
+/*****************************************************************************/
+
+/** Starts an SOE write operation.
+ *
+ * \return Zero on success, otherwise a negative error code.
+ */
+static ATTRIBUTES int ec_ioctl_soe_request_write(
+        ec_master_t *master, /**< EtherCAT master. */
+        void *arg, /**< ioctl() argument. */
+        ec_ioctl_context_t *ctx /**< Private data structure of file handle. */
+        )
+{
+    ec_ioctl_soe_request_t data;
+    ec_slave_config_t *sc;
+    ec_soe_request_t *req;
+    int ret;
+
+    if (unlikely(!ctx->requested))
+        return -EPERM;
+
+    if (copy_from_user(&data, (void __user *) arg, sizeof(data)))
+        return -EFAULT;
+
+    if (!data.size) {
+        EC_MASTER_ERR(master, "SOE download: Data size may not be zero!\n");
+        return -EINVAL;
+    }
+
+    /* no locking of master_sem needed, because neither sc nor req will not be
+     * deleted in the meantime. */
+
+    if (!(sc = ec_master_get_config(master, data.config_index))) {
+        return -ENOENT;
+    }
+
+    if (!(req = ec_slave_config_find_soe_request(sc, data.request_index))) {
+        return -ENOENT;
+    }
+
+    ret = ec_soe_request_alloc(req, data.size);
+    if (ret)
+        return ret;
+
+    if (copy_from_user(req->data, (void __user *) data.data, data.size))
+        return -EFAULT;
+
+    req->data_size = data.size;
+    ecrt_soe_request_write(req);
+    return 0;
+}
+
+/*****************************************************************************/
+
+/** Read SOE data.
+ *
+ * \return Zero on success, otherwise a negative error code.
+ */
+static ATTRIBUTES int ec_ioctl_soe_request_data(
+        ec_master_t *master, /**< EtherCAT master. */
+        void *arg, /**< ioctl() argument. */
+        ec_ioctl_context_t *ctx /**< Private data structure of file handle. */
+        )
+{
+    ec_ioctl_soe_request_t data;
+    ec_slave_config_t *sc;
+    ec_soe_request_t *req;
+
+    if (unlikely(!ctx->requested))
+        return -EPERM;
+
+    if (copy_from_user(&data, (void __user *) arg, sizeof(data)))
+        return -EFAULT;
+
+    /* no locking of master_sem needed, because neither sc nor req will not be
+     * deleted in the meantime. */
+
+    if (!(sc = ec_master_get_config(master, data.config_index))) {
+        return -ENOENT;
+    }
+
+    if (!(req = ec_slave_config_find_soe_request(sc, data.request_index))) {
+        return -ENOENT;
+    }
+
+    if (copy_to_user((void __user *) data.data, ecrt_soe_request_data(req),
+                ecrt_soe_request_data_size(req)))
+        return -EFAULT;
+
+    return 0;
 }
 
 /*****************************************************************************/
@@ -6069,6 +6285,33 @@ long EC_IOCTL(
                 break;
             }
             ret = ec_ioctl_mbox_gateway(master, arg, ctx);
+            break;
+        case EC_IOCTL_SC_SOE_REQUEST:
+            if (!ctx->writable) {
+                ret = -EPERM;
+                break;
+            }
+            ret = ec_ioctl_sc_create_soe_request(master, arg, ctx);
+            break;
+        case EC_IOCTL_SOE_REQUEST_STATE:
+            ret = ec_ioctl_soe_request_state(master, arg, ctx);
+            break;
+        case EC_IOCTL_SOE_REQUEST_READ:
+            if (!ctx->writable) {
+                ret = -EPERM;
+                break;
+            }
+            ret = ec_ioctl_soe_request_read(master, arg, ctx);
+            break;
+        case EC_IOCTL_SOE_REQUEST_WRITE:
+            if (!ctx->writable) {
+                ret = -EPERM;
+                break;
+            }
+            ret = ec_ioctl_soe_request_write(master, arg, ctx);
+            break;
+        case EC_IOCTL_SOE_REQUEST_DATA:
+            ret = ec_ioctl_soe_request_data(master, arg, ctx);
             break;
         default:
             ret = -ENOTTY;

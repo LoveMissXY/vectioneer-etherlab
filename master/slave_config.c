@@ -91,7 +91,7 @@ void ec_slave_config_init(
     INIT_LIST_HEAD(&sc->reg_requests);
     INIT_LIST_HEAD(&sc->voe_handlers);
     INIT_LIST_HEAD(&sc->soe_configs);
-
+    INIT_LIST_HEAD(&sc->soe_requests);
     ec_coe_emerg_ring_init(&sc->emerg_ring, sc);
 }
 
@@ -155,6 +155,13 @@ void ec_slave_config_clear(
 
     // free all SoE configurations
     list_for_each_entry_safe(soe, next_soe, &sc->soe_configs, list) {
+        list_del(&soe->list);
+        ec_soe_request_clear(soe);
+        kfree(soe);
+    }
+
+    // free all SOE requests
+    list_for_each_entry_safe(soe, next_soe, &sc->soe_requests, list) {
         list_del(&soe->list);
         ec_soe_request_clear(soe);
         kfree(soe);
@@ -599,6 +606,24 @@ ec_voe_handler_t *ec_slave_config_find_voe_handler(
 
 /*****************************************************************************/
 
+ec_soe_request_t *ec_slave_config_find_soe_request(
+    ec_slave_config_t *sc,
+    unsigned int pos
+    )
+{
+    ec_soe_request_t *req;
+
+    list_for_each_entry(req, &sc->soe_requests, list) {
+        if (pos--)
+            continue;
+        return req;
+    }
+
+    return NULL;
+}
+
+/*****************************************************************************/
+
 /** Expires any requests that have been started on a detached slave.
  */
 void ec_slave_config_expire_disconnected_requests(
@@ -608,6 +633,7 @@ void ec_slave_config_expire_disconnected_requests(
     ec_sdo_request_t *sdo_req;
     ec_foe_request_t *foe_req;
     ec_reg_request_t *reg_req;
+    ec_soe_request_t *soe_req;
 
     if (sc->slave) { return; }
 
@@ -633,6 +659,14 @@ void ec_slave_config_expire_disconnected_requests(
             EC_CONFIG_DBG(sc, 1, "Aborting register request; no slave attached.\n");
             reg_req->state = EC_INT_REQUEST_FAILURE;
         }
+    }
+
+    list_for_each_entry(soe_req, &sc->soe_requests, list) {
+      if (soe_req->state == EC_INT_REQUEST_QUEUED ||
+          soe_req->state == EC_INT_REQUEST_BUSY) {
+        EC_CONFIG_DBG(sc, 1, "Aborting SOE request; no slave attached.\n");
+        soe_req->state = EC_INT_REQUEST_FAILURE;
+      }
     }
 }
 
@@ -1004,7 +1038,7 @@ void ecrt_slave_config_dc(ec_slave_config_t *sc, uint16_t assign_activate,
     {
         sc->dc_sync[1].shift_time = (sync1_cycle_time + sync1_shift_time) %
                 sync0_cycle_time;
-              
+
         if ((sync1_cycle_time + sync1_shift_time) < sc->dc_sync[1].shift_time) {
             EC_CONFIG_ERR(sc, "Slave Config DC results in a negative "
                     "sync1 cycle.  Resetting to zero cycle and shift time\n");
@@ -1236,6 +1270,56 @@ ec_sdo_request_t *ecrt_slave_config_create_sdo_request_complete(
 {
     ec_sdo_request_t *s = ecrt_slave_config_create_sdo_request_err(sc, index,
             0, 1, size);
+    return IS_ERR(s) ? NULL : s;
+}
+
+/*****************************************************************************/
+
+ec_soe_request_t *ecrt_slave_config_create_soe_request_err(
+        ec_slave_config_t *sc, uint8_t drive_no, uint16_t idn, size_t size)
+{
+    ec_soe_request_t *req;
+    int ret;
+
+    EC_CONFIG_DBG(sc, 1, "%s(sc = 0x%p, "
+            "drive_no = 0x%02X, idn = 0x%04X, size = %zu)\n",
+            __func__, sc, drive_no, idn, size);
+
+    if (!(req = (ec_soe_request_t *)
+                kmalloc(sizeof(ec_soe_request_t), GFP_KERNEL))) {
+        EC_CONFIG_ERR(sc, "Failed to allocate SOE request memory!\n");
+        return ERR_PTR(-ENOMEM);
+    }
+
+    ec_soe_request_init(req);
+    ec_soe_request_set_drive_no(req, drive_no);
+    ec_soe_request_set_idn(req, idn);
+
+    ret = ec_soe_request_alloc(req, size);
+    if (ret < 0) {
+        ec_soe_request_clear(req);
+        kfree(req);
+        return ERR_PTR(ret);
+    }
+
+    // prepare data for optional writing
+    memset(req->data, 0x00, size);
+    req->data_size = size;
+
+    ec_lock_down(&sc->master->master_sem);
+    list_add_tail(&req->list, &sc->soe_requests);
+    ec_lock_up(&sc->master->master_sem);
+
+    return req;
+}
+
+/*****************************************************************************/
+
+ec_soe_request_t *ecrt_slave_config_create_soe_request(
+        ec_slave_config_t *sc, uint8_t drive_no, uint16_t idn, size_t size)
+{
+    ec_soe_request_t *s = ecrt_slave_config_create_soe_request_err(sc, drive_no,
+            idn, size);
     return IS_ERR(s) ? NULL : s;
 }
 

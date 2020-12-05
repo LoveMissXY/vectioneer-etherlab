@@ -59,6 +59,7 @@ void ec_fsm_slave_state_reg_request(ec_fsm_slave_t *, ec_datagram_t *);
 int ec_fsm_slave_action_process_foe(ec_fsm_slave_t *, ec_datagram_t *);
 void ec_fsm_slave_state_foe_request(ec_fsm_slave_t *, ec_datagram_t *);
 int ec_fsm_slave_action_process_soe(ec_fsm_slave_t *, ec_datagram_t *);
+int ec_fsm_slave_action_process_config_soe(ec_fsm_slave_t *, ec_datagram_t *);
 void ec_fsm_slave_state_soe_request(ec_fsm_slave_t *, ec_datagram_t *);
 #ifdef EC_EOE
 int ec_fsm_slave_action_process_eoe(ec_fsm_slave_t *, ec_datagram_t *);
@@ -263,13 +264,13 @@ static int ec_slave_reconnect_to_eoe_handler(
     }
 
     list_for_each_entry(eoe, &master->eoe_handlers, list) {
-        if ((eoe->slave == NULL) && 
+        if ((eoe->slave == NULL) &&
                 (strncmp(name, ec_eoe_name(eoe), EC_DATAGRAM_NAME_SIZE) == 0)) {
             ec_eoe_link_slave(eoe, slave);
             return 0;
         }
     }
-    
+
     // none found
     return -1;
 }
@@ -296,14 +297,14 @@ void ec_fsm_slave_state_scan(
 
 #ifdef EC_EOE
     if (slave->sii_image && (slave->sii_image->sii.mailbox_protocols & EC_MBOX_EOE)) {
-        // try to connect to existing eoe handler, 
+        // try to connect to existing eoe handler,
         // otherwise try to create a new one (if master not active)
         if (ec_slave_reconnect_to_eoe_handler(slave) == 0) {
             // reconnected
         } else if (eoe_autocreate) {
             // auto create EoE handler for this slave
             ec_eoe_t *eoe;
-        
+
             if (!(eoe = kmalloc(sizeof(ec_eoe_t), GFP_KERNEL))) {
                 EC_SLAVE_ERR(slave, "Failed to allocate EoE handler memory!\n");
             } else if (ec_eoe_auto_init(eoe, slave)) {
@@ -653,9 +654,59 @@ int ec_fsm_slave_action_process_config_sdo(
 }
 
 /*****************************************************************************/
+/** Check for pending internal SOE requests and process one.
+ *
+ * \return non-zero, if an SOE request is processed.
+ */
+int ec_fsm_slave_action_process_config_soe(
+        ec_fsm_slave_t *fsm, /**< Slave state machine. */
+        ec_datagram_t *datagram /**< Datagram to use. */
+        )
+{
+    ec_slave_t *slave = fsm->slave;
+    ec_soe_request_t *request;
+
+    if (!slave->config) {
+        return 0;
+    }
+
+    list_for_each_entry(request, &slave->config->soe_requests, list) {
+        if (request->state == EC_INT_REQUEST_QUEUED) {
+            /* if (ec_sdo_request_timed_out(request)) { */
+            /*     request->state = EC_INT_REQUEST_FAILURE; */
+            /*     EC_SLAVE_DBG(slave, 1, "Internal SOE request timed out.\n"); */
+            /*     continue; */
+            /* } */
+
+            if (slave->current_state & EC_SLAVE_STATE_ACK_ERR) {
+                EC_SLAVE_WARN(slave, "Aborting SOE request,"
+                        " slave has error flag set.\n");
+                request->state = EC_INT_REQUEST_FAILURE;
+                continue;
+            }
+
+            if (slave->current_state == EC_SLAVE_STATE_INIT) {
+                EC_SLAVE_WARN(slave, "Aborting SOE request, slave is in INIT.\n");
+                request->state = EC_INT_REQUEST_FAILURE;
+                continue;
+            }
+
+            request->state = EC_INT_REQUEST_BUSY;
+            EC_SLAVE_DBG(slave, 1, "Processing internal SOE request...\n");
+            fsm->soe_request = request;
+            fsm->state = ec_fsm_slave_state_soe_request;
+            ec_fsm_soe_transfer(&fsm->fsm_soe, slave, request);
+            ec_fsm_soe_exec(&fsm->fsm_soe, datagram);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*****************************************************************************/
 
 /** Sets the current state of the state machine to IDLE
- * 
+ *
  * \return Non-zero if successful; otherwise state machine is busy.
  */
 int ec_fsm_slave_set_unready(
@@ -723,11 +774,16 @@ void ec_fsm_slave_state_ready(
         return;
     }
 
+    // Check for pending internal SOE requests
+    if (ec_fsm_slave_action_process_config_soe(fsm, datagram)) {
+        return;
+    }
+
     // Check if the slave needs to read the SDO dictionary
     if (ec_fsm_slave_action_process_dict(fsm, datagram)) {
         return;
     }
-    
+
     // Check for pending external SDO requests
     if (ec_fsm_slave_action_process_sdo(fsm, datagram)) {
         return;
@@ -754,7 +810,7 @@ void ec_fsm_slave_state_ready(
         return;
     }
 #endif
-    
+
     // Check for pending MBox Gateway requests
     if (ec_fsm_slave_action_process_mbg(fsm, datagram)) {
         return;

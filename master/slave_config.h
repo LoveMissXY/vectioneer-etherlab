@@ -148,6 +148,7 @@ struct ec_slave_config {
     struct list_head voe_handlers; /**< List of VoE handlers. */
     struct list_head reg_requests; /**< List of register requests. */
     struct list_head soe_configs; /**< List of SoE configurations. */
+    struct list_head soe_requests; /**< List of SOE requests. */
 
     ec_coe_emerg_ring_t emerg_ring; /**< CoE emergency ring buffer. */
 };
@@ -177,17 +178,20 @@ ec_reg_request_t *ec_slave_config_find_reg_request(ec_slave_config_t *,
         unsigned int);
 ec_voe_handler_t *ec_slave_config_find_voe_handler(ec_slave_config_t *,
         unsigned int);
+ec_soe_request_t *ec_slave_config_find_soe_request(ec_slave_config_t *,
+        unsigned int);
 void ec_slave_config_expire_disconnected_requests(ec_slave_config_t *);
 
 ec_sdo_request_t *ecrt_slave_config_create_sdo_request_err(
         ec_slave_config_t *, uint16_t, uint8_t, uint8_t, size_t);
+ec_soe_request_t *ecrt_slave_config_create_soe_request_err(
+        ec_slave_config_t *, uint8_t, uint16_t, size_t);
 ec_foe_request_t *ecrt_slave_config_create_foe_request_err(
         ec_slave_config_t *, size_t);
 ec_voe_handler_t *ecrt_slave_config_create_voe_handler_err(
         ec_slave_config_t *, size_t);
 ec_reg_request_t *ecrt_slave_config_create_reg_request_err(
         ec_slave_config_t *, size_t);
-
 /*****************************************************************************/
 
 #endif

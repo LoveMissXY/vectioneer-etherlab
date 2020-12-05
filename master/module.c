@@ -113,7 +113,7 @@ int __init ec_init_module(void)
 {
     int i, ret = 0;
 
-    EC_INFO("Master driver %s\n", EC_MASTER_VERSION);
+    EC_INFO("Master driver %s (with SOE requests)\n", EC_MASTER_VERSION);
 
     ec_lock_init(&master_sem);
 
@@ -168,7 +168,7 @@ int __init ec_init_module(void)
         if (ret)
             goto out_free_masters;
     }
-    
+
     EC_INFO("%u master%s waiting for devices.\n",
             master_count, (master_count == 1 ? "" : "s"));
     return ret;

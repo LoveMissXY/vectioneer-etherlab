@@ -45,7 +45,7 @@
 
 /** Sercos-over-EtherCAT request.
  */
-typedef struct {
+struct ec_soe_request {
     struct list_head list; /**< List item. */
     uint8_t drive_no; /**< Drive number. */
     uint16_t idn; /**< Sercos ID-Number. */
@@ -59,7 +59,7 @@ typedef struct {
     unsigned long jiffies_sent; /**< Jiffies, when the upload/download
                                      request was sent. */
     uint16_t error_code; /**< SoE error code. */
-} ec_soe_request_t;
+};
 
 /*****************************************************************************/
 

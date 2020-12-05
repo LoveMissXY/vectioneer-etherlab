@@ -258,6 +258,9 @@ typedef struct ec_voe_handler ec_voe_handler_t; /**< \see ec_voe_handler. */
 struct ec_reg_request;
 typedef struct ec_reg_request ec_reg_request_t; /**< \see ec_reg_request. */
 
+struct ec_soe_request;
+typedef struct ec_soe_request ec_soe_request_t;
+
 /*****************************************************************************/
 
 /** Master state.
@@ -1114,7 +1117,7 @@ int ecrt_master_eoe_is_open(
 int ecrt_master_eoe_process(
         ec_master_t *master /**< EtherCAT master. */
         );
-        
+
 #endif /* !defined(__KERNEL__) && defined(EC_RTDM) && (EC_EOE) */
 
 #ifdef EC_EOE
@@ -1128,7 +1131,7 @@ int ecrt_master_eoe_addif(
         uint16_t alias, /**< slave alias. */
         uint16_t posn /**< slave position. */
         );
-        
+
 /** delete an EOE network interface
  *
  * \return 0 on success else negative error code
@@ -1243,7 +1246,7 @@ int ecrt_master_reference_clock_time(
 /** Queues the 64bit dc reference slave clock time value datagram for sending.
  *
  * The datagram read the 64bit dc timestamp of the DC reference slave.
- * (register \a 0x0910:0x0917). The result can be checked with the 
+ * (register \a 0x0910:0x0917). The result can be checked with the
  * ecrt_master_64bit_reference_clock_time() method.
  */
 void ecrt_master_64bit_reference_clock_time_queue(
@@ -1251,7 +1254,7 @@ void ecrt_master_64bit_reference_clock_time_queue(
         );
 
 /** Get the 64bit dc reference slave clock time.
- * 
+ *
  * ecrt_master_64bit_reference_clock_time_queue() must be called in the cycle
  * prior to calling this method
  *
@@ -1291,7 +1294,7 @@ uint32_t ecrt_master_sync_monitor_process(
 
 /** Selects whether to process slave requests by the application or the master
  *
- * if rt_slave_requests \a True, slave requests are to be handled by calls to 
+ * if rt_slave_requests \a True, slave requests are to be handled by calls to
  * ecrt_master_exec_requests() from the applications realtime context,
  * otherwise the master will handle them from its operation thread
  *
@@ -1300,7 +1303,7 @@ uint32_t ecrt_master_sync_monitor_process(
 int ecrt_master_rt_slave_requests(
         ec_master_t *master, /**< EtherCAT master. */
         unsigned int rt_slave_requests /**< if \a True, slave requests are
-                                       to be handled by calls to 
+                                       to be handled by calls to
                                       ecrt_master_exec_requests() from
                                       the applications realtime context. */
         );
@@ -2115,6 +2118,98 @@ void ecrt_sdo_request_write_with_size(
  */
 void ecrt_sdo_request_read(
         ec_sdo_request_t *req /**< SDO request. */
+        );
+
+/*****************************************************************************
+ * SOE request methods.
+ ****************************************************************************/
+
+/** Access to the SOE request's data.
+ *
+ * This function returns a pointer to the request's internal SOE data memory.
+ *
+ * - After a read operation was successful, integer data can be evaluated using
+ *   the EC_READ_*() macros as usual. Example:
+ *   \code
+ *   uint16_t value = EC_READ_U16(ecrt_soe_request_data(soe)));
+ *   \endcode
+ * - If a write operation shall be triggered, the data have to be written to
+ *   the internal memory. Use the EC_WRITE_*() macros, if you are writing
+ *   integer data. Be sure, that the data fit into the memory. The memory size
+ *   is a parameter of ecrt_slave_config_create_soe_request().
+ *   \code
+ *   EC_WRITE_U16(ecrt_soe_request_data(soe), 0xFFFF);
+ *   \endcode
+ *
+ * \attention The return value can be invalid during a read operation, because
+ * the internal SOE data memory could be re-allocated if the read SOE data do
+ * not fit inside.
+ *
+ * \return Pointer to the internal SOE data memory.
+ */
+uint8_t *ecrt_soe_request_data(
+        ec_soe_request_t *req /**< SOE request. */
+        );
+
+/** Returns the current SOE data size.
+ *
+ * When the SOE request is created, the data size is set to the size of the
+ * reserved memory. After a read operation the size is set to the size of the
+ * read data. The size is not modified in any other situation.
+ *
+ * \return SOE data size in bytes.
+ */
+size_t ecrt_soe_request_data_size(
+        const ec_soe_request_t *req /**< SOE request. */
+        );
+
+/** Get the current state of the SOE request.
+ *
+ * \return Request state.
+ */
+#ifdef __KERNEL__
+ec_request_state_t ecrt_soe_request_state(
+        const ec_soe_request_t *req /**< SOE request. */
+    );
+#else
+ec_request_state_t ecrt_soe_request_state(
+        ec_soe_request_t *req /**< SOE request. */
+    );
+#endif
+
+/** Schedule an SOE write operation.
+ *
+ * \attention This method may not be called while ecrt_soe_request_state()
+ * returns EC_REQUEST_BUSY.
+ */
+void ecrt_soe_request_write(
+        ec_soe_request_t *req /**< SOE request. */
+        );
+
+/** Schedule an SOE write operation.
+ *
+ * \attention This method may not be called while ecrt_soe_request_state()
+ * returns EC_REQUEST_BUSY.
+ *
+ * \attention The size must be less than or equal to the size specified
+ * when the request was created.
+ */
+void ecrt_soe_request_write_with_size(
+        ec_soe_request_t *req, /**< SOE request. */
+        size_t size /**< Size of data to write. */
+        );
+
+/** Schedule an SOE read operation.
+ *
+ * \attention This method may not be called while ecrt_soe_request_state()
+ * returns EC_REQUEST_BUSY.
+ *
+ * \attention After calling this function, the return value of
+ * ecrt_soe_request_data() must be considered as invalid while
+ * ecrt_soe_request_state() returns EC_REQUEST_BUSY.
+ */
+void ecrt_soe_request_read(
+        ec_soe_request_t *req /**< SOE request. */
         );
 
 /*****************************************************************************

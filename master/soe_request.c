@@ -252,3 +252,34 @@ void ec_soe_request_write(
 }
 
 /*****************************************************************************/
+
+ec_request_state_t ecrt_soe_request_state(const ec_soe_request_t *req)
+{
+   return ec_request_state_translation_table[req->state];
+}
+
+/*****************************************************************************/
+
+size_t ecrt_soe_request_data_size(const ec_soe_request_t *req)
+{
+    return req->data_size;
+}
+
+/*****************************************************************************/
+
+void ecrt_soe_request_read(ec_soe_request_t *req) {
+    ec_soe_request_read(req);
+}
+
+/*****************************************************************************/
+
+void ecrt_soe_request_write(ec_soe_request_t *req) {
+    ec_soe_request_write(req);
+}
+
+/*****************************************************************************/
+
+uint8_t *ecrt_soe_request_data(ec_soe_request_t *req)
+{
+    return req->data;
+}
