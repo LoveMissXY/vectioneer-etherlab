@@ -1842,6 +1842,23 @@ ec_reg_request_t *ecrt_slave_config_create_reg_request(
         size_t size /**< Data size to reserve. */
         );
 
+/** Create an SOE request to exchange SOEs during realtime operation.
+ *
+ * The created SOE request object is freed automatically when the master is
+ * released.
+ *
+ * This method has to be called in non-realtime context before
+ * ecrt_master_activate().
+ *
+ * \return New SOE request, or NULL on error.
+ */
+ec_soe_request_t *ecrt_slave_config_create_soe_request(
+        ec_slave_config_t *sc, /**< Slave configuration. */
+        uint8_t drive_no, /**< SOE drive_no. */
+        uint16_t idn, /**< SOE idn. */
+        size_t size /**< Data size to reserve. */
+        );
+
 /** Outputs the state of the slave configuration.
  *
  * Stores the state information in the given \a state structure. The state

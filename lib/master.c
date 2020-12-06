@@ -203,6 +203,7 @@ ec_slave_config_t *ecrt_master_slave_config(ec_master_t *master,
     sc->first_foe_request = NULL;
     sc->first_reg_request = NULL;
     sc->first_voe_handler = NULL;
+    sc->first_soe_request = NULL;
 
     ec_master_add_slave_config(master, sc);
 
@@ -755,7 +756,7 @@ size_t ecrt_master_send_ext(ec_master_t *master)
 int ecrt_master_eoe_is_open(ec_master_t *master)
 {
     int ret;
-    
+
     ret = ioctl(master->fd, EC_IOCTL_EOE_IS_OPEN, NULL);
     if (EC_IOCTL_IS_ERROR(ret)) {
         EC_PRINT_ERR("Failed to check if an eoe is open: %s\n",
@@ -764,13 +765,13 @@ int ecrt_master_eoe_is_open(ec_master_t *master)
 
     return ret;
 }
-        
+
 /****************************************************************************/
 
 int ecrt_master_eoe_process(ec_master_t *master)
 {
     int ret;
-    
+
     ret = ioctl(master->fd, EC_IOCTL_EOE_PROCESS, NULL);
     if (EC_IOCTL_IS_ERROR(ret)) {
         EC_PRINT_ERR("Failed to process eoe handlers: %s\n",
@@ -781,7 +782,7 @@ int ecrt_master_eoe_process(ec_master_t *master)
 }
 
 #endif
-        
+
 /****************************************************************************/
 
 #ifdef EC_EOE
@@ -792,7 +793,7 @@ int ecrt_master_eoe_addif(ec_master_t *master, uint16_t alias, uint16_t posn)
     ec_ioctl_eoe_if_t data;
     data.alias = alias;
     data.position = posn;
-    
+
     ret = ioctl(master->fd, EC_IOCTL_EOE_ADDIF, &data);
     if (EC_IOCTL_IS_ERROR(ret)) {
         EC_PRINT_ERR("Failed to add EoE interface: %s\n",
@@ -810,7 +811,7 @@ int ecrt_master_eoe_delif(ec_master_t *master, uint16_t alias, uint16_t posn)
     ec_ioctl_eoe_if_t data;
     data.alias = alias;
     data.position = posn;
-    
+
     ret = ioctl(master->fd, EC_IOCTL_EOE_DELIF, &data);
     if (EC_IOCTL_IS_ERROR(ret)) {
         EC_PRINT_ERR("Failed to add EoE interface: %s\n",
@@ -965,7 +966,7 @@ int ecrt_master_64bit_reference_clock_time(ec_master_t *master,
     // we use EAGAIN to inform the user that the ref clock is not ready yet.
     // also we only report the first error of its kind, otherwise the errors
     // will flood the logs
-    if ( (ret != lastErr64BitRefClk) && EC_IOCTL_IS_ERROR(ret) && 
+    if ( (ret != lastErr64BitRefClk) && EC_IOCTL_IS_ERROR(ret) &&
          (EC_IOCTL_ERRNO(ret) != EAGAIN) ) {
         EC_PRINT_ERR("Failed to get 64bit reference clock time: %s\n",
                 strerror(EC_IOCTL_ERRNO(ret)));

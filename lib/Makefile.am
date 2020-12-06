@@ -39,6 +39,7 @@ libethercat_la_SOURCES = \
 	foe_request.c \
 	reg_request.c \
 	sdo_request.c \
+	soe_request.c \
 	slave_config.c \
 	voe_handler.c
 
