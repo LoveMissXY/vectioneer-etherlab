@@ -54,6 +54,26 @@ void ec_soe_request_clear(ec_soe_request_t *req)
  * Application interface.
  ****************************************************************************/
 
+void ecrt_soe_request_index(ec_soe_request_t *req, uint8_t drive_no,
+        uint16_t idn)
+{
+    ec_ioctl_soe_request_t data;
+    int ret;
+
+    data.config_index = req->config->index;
+    data.request_index = req->index;
+    data.drive_no = drive_no;
+    data.idn = idn;
+
+    ret = ioctl(req->config->master->fd, EC_IOCTL_SOE_REQUEST_IDN, &data);
+    if (EC_IOCTL_IS_ERROR(ret)) {
+        EC_PRINT_ERR("Failed to set SOE request drive_no/idn: %s\n",
+                strerror(EC_IOCTL_ERRNO(ret)));
+    }
+}
+
+/*****************************************************************************/
+
 uint8_t *ecrt_soe_request_data(ec_soe_request_t *req)
 {
     return req->data;

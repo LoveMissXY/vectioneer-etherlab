@@ -5433,6 +5433,44 @@ static ATTRIBUTES int ec_ioctl_sc_create_soe_request(
 
 /*****************************************************************************/
 
+/** Sets an SOE request's SOE index and subindex.
+ *
+ * \return Zero on success, otherwise a negative error code.
+ */
+static ATTRIBUTES int ec_ioctl_soe_request_idn(
+        ec_master_t *master, /**< EtherCAT master. */
+        void *arg, /**< ioctl() argument. */
+        ec_ioctl_context_t *ctx /**< Private data structure of file handle. */
+        )
+{
+    ec_ioctl_soe_request_t data;
+    ec_slave_config_t *sc;
+    ec_soe_request_t *req;
+
+    if (unlikely(!ctx->requested))
+        return -EPERM;
+
+    if (copy_from_user(&data, (void __user *) arg, sizeof(data)))
+        return -EFAULT;
+
+    /* no locking of master_sem needed, because neither sc nor req will not be
+     * deleted in the meantime. */
+
+    if (!(sc = ec_master_get_config(master, data.config_index))) {
+        return -ENOENT;
+    }
+
+    if (!(req = ec_slave_config_find_soe_request(sc, data.request_index))) {
+        return -ENOENT;
+    }
+
+    ecrt_soe_request_idn(req, data.drive_no, data.idn);
+
+    return 0;
+}
+
+/*****************************************************************************/
+
 static ATTRIBUTES int ec_ioctl_soe_request_state(
         ec_master_t *master, /**< EtherCAT master. */
         void *arg, /**< ioctl() argument. */
@@ -6292,6 +6330,13 @@ long EC_IOCTL(
                 break;
             }
             ret = ec_ioctl_sc_create_soe_request(master, arg, ctx);
+            break;
+        case EC_IOCTL_SOE_REQUEST_IDN:
+            if (!ctx->writable) {
+                ret = -EPERM;
+                break;
+            }
+            ret = ec_ioctl_soe_request_idn(master, arg, ctx);
             break;
         case EC_IOCTL_SOE_REQUEST_STATE:
             ret = ec_ioctl_soe_request_state(master, arg, ctx);

@@ -2141,6 +2141,20 @@ void ecrt_sdo_request_read(
  * SOE request methods.
  ****************************************************************************/
 
+/** Set the SOE index and subindex and prepare for non-complete-access.
+ *
+ * This is valid even if the request was created for complete-access.
+ *
+ * \attention If the SOE index and/or subindex is changed while
+ * ecrt_soe_request_state() returns EC_REQUEST_BUSY, this may lead to
+ * unexpected results.
+ */
+void ecrt_soe_request_idn(
+        ec_soe_request_t *req, /**< SOE request. */
+        uint8_t drive_no, /**< SOE drive no. */
+        uint16_t idn /**< SOE IDN. */
+        );
+
 /** Access to the SOE request's data.
  *
  * This function returns a pointer to the request's internal SOE data memory.

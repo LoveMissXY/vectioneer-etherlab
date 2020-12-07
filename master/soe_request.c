@@ -283,3 +283,11 @@ uint8_t *ecrt_soe_request_data(ec_soe_request_t *req)
 {
     return req->data;
 }
+
+/*****************************************************************************/
+
+void ecrt_soe_request_idn(ec_soe_request_t *req, uint8_t drive_no, uint16_t idn)
+{
+    ec_soe_request_set_drive_no(req, drive_no);
+    ec_soe_request_set_idn(req, idn);
+}

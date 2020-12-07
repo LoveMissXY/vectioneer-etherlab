@@ -196,6 +196,7 @@
 #define EC_IOCTL_SOE_REQUEST_READ     EC_IOWR(0x82, ec_ioctl_soe_request_t)
 #define EC_IOCTL_SOE_REQUEST_WRITE    EC_IOWR(0x83, ec_ioctl_soe_request_t)
 #define EC_IOCTL_SOE_REQUEST_DATA     EC_IOWR(0x84, ec_ioctl_soe_request_t)
+#define EC_IOCTL_SOE_REQUEST_IDN      EC_IOWR(0x85, ec_ioctl_soe_request_t)
 
 /*****************************************************************************/
 
