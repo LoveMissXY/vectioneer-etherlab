@@ -177,6 +177,12 @@ void ec_fsm_slave_clear(
 
 /*****************************************************************************/
 
+void ec_fsm_slave_reset(ec_fsm_slave_t *fsm) {
+    ec_fsm_soe_reset(&fsm->fsm_soe);
+}
+
+/*****************************************************************************/
+
 /** Executes the current state of the state machine.
  *
  * \return 1 if \a datagram was used, else 0.

@@ -64,6 +64,7 @@ struct ec_fsm_soe {
 
 void ec_fsm_soe_init(ec_fsm_soe_t *);
 void ec_fsm_soe_clear(ec_fsm_soe_t *);
+void ec_fsm_soe_reset(ec_fsm_soe_t *);
 
 void ec_fsm_soe_transfer(ec_fsm_soe_t *, ec_slave_t *, ec_soe_request_t *);
 

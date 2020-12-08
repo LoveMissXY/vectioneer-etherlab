@@ -127,6 +127,14 @@ void ec_fsm_soe_clear(
 
 /*****************************************************************************/
 
+void ec_fsm_soe_reset(ec_fsm_soe_t *fsm) {
+    fsm->state = ec_fsm_soe_error;
+    fsm->datagram = NULL;
+}
+
+
+/*****************************************************************************/
+
 /** Starts to transfer an IDN to/from a slave.
  */
 void ec_fsm_soe_transfer(
