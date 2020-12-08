@@ -693,7 +693,7 @@ ec_soe_request_t *ecrt_slave_config_create_soe_request(
 
     ret = ioctl(sc->master->fd, EC_IOCTL_SC_SOE_REQUEST, &data);
     if (EC_IOCTL_IS_ERROR(ret)) {
-        EC_PRINT_ERR("Failed to create SDO request: %s\n",
+        EC_PRINT_ERR("Failed to create SOE request: %s\n",
                 strerror(EC_IOCTL_ERRNO(ret)));
         ec_soe_request_clear(req);
         free(req);
