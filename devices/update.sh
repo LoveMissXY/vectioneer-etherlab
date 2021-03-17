@@ -22,5 +22,5 @@ for f in $KERNELDIR/drivers/net/ethernet/{realtek/8139too,realtek/r8169,intel/e1
     op=${b/\./-$PREVER-orig.}
     ep=${b/\./-$PREVER-ethercat.}
     diff -up $op $ep | patch -p1 $e
-    hg add $o $e
+    git add $o $e
 done
