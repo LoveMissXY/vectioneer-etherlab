@@ -1,0 +1,18 @@
+# HG changeset patch
+# User Florian Pose <fp@igh.de>
+# Date 1518605163 -3600
+#      Wed Feb 14 11:46:03 2018 +0100
+Do not call watchdog function while frames are received.
+(grafted from 37d89f56e9f1c2dcea925c921ba7b872e3522c6a)
+
+diff --git a/devices/igb/igb_main-3.18-ethercat.c b/devices/igb/igb_main-3.18-ethercat.c
+--- a/devices/igb/igb_main-3.18-ethercat.c
++++ b/devices/igb/igb_main-3.18-ethercat.c
+@@ -6798,6 +6798,7 @@ static struct sk_buff *igb_fetch_rx_buff
+ 			page_address(rx_buffer->page) + rx_buffer->page_offset;
+ 		unsigned int size = le16_to_cpu(rx_desc->wb.upper.length);
+ 		ecdev_receive(adapter->ecdev, va, size);
++		adapter->ec_watchdog_jiffies = jiffies;
+ 		igb_reuse_rx_page(rx_ring, rx_buffer);
+ 	}
+ 	else {

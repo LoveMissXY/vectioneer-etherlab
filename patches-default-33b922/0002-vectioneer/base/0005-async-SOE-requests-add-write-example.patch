@@ -1,0 +1,139 @@
+From c798ebc708bc4ce4602a54584c3937c6fa9a2685 Mon Sep 17 00:00:00 2001
+From: Mikhail Rudenko <mike.rudenko@gmail.com>
+Date: Mon, 7 Dec 2020 04:05:15 +0300
+Subject: [PATCH 5/9] async SOE requests: add write example
+
+---
+ examples/user/ec_soe_requests_example.c | 74 +++++++++++++------------
+ 1 file changed, 40 insertions(+), 34 deletions(-)
+
+diff --git a/examples/user/ec_soe_requests_example.c b/examples/user/ec_soe_requests_example.c
+index 787fb57..804473d 100644
+--- a/examples/user/ec_soe_requests_example.c
++++ b/examples/user/ec_soe_requests_example.c
+@@ -64,8 +64,7 @@
+ static ec_master_t *master = NULL;
+ static ec_master_state_t master_state = {};
+ 
+-ec_soe_request_t *soe_req = NULL;
+-
++static ec_soe_request_t *soe_req_read = NULL, *soe_req_write = NULL;
+ /****************************************************************************/
+ 
+ static unsigned int counter = 0;
+@@ -73,46 +72,39 @@ static unsigned int blink = 0;
+ 
+ /*****************************************************************************/
+ 
+-void check_master_state(void)
+-{
+-    ec_master_state_t ms;
+-
+-    ecrt_master_state(master, &ms);
+-
+-    if (ms.slaves_responding != master_state.slaves_responding) {
+-        printf("%u slave(s).\n", ms.slaves_responding);
+-    }
+-    if (ms.al_states != master_state.al_states) {
+-        printf("AL states: 0x%02X.\n", ms.al_states);
+-    }
+-    if (ms.link_up != master_state.link_up) {
+-        printf("Link is %s.\n", ms.link_up ? "up" : "down");
+-    }
+-
+-    master_state = ms;
+-}
+-
+-void check_request() {
++void check_request(ec_soe_request_t *soe_req, int write) {
+     ec_request_state_t req_state;
+-    uint32_t data;
++    const char *verb = write ? "write" : "read";
++
++    uint32_t read_data;
++    uint16_t write_data = 3;
+ 
+     req_state = ecrt_soe_request_state(soe_req);
+ 
+     if(req_state == EC_REQUEST_ERROR) {
+-        printf("SOE request error\n");
++        printf("SOE %s request error\n", verb);
+     } else if(req_state == EC_REQUEST_SUCCESS) {
+-        data = *(uint32_t *)ecrt_soe_request_data(soe_req);
+-        printf("SOE request success, data=%d\n", data);
++        if(!write) {
++            read_data = *(uint32_t*)ecrt_soe_request_data(soe_req);
++            printf("SOE %s request success, data=%d\n", verb, read_data);
++        } else {
++            printf("SOE %s request success\n", verb);
++        }
+     } else if(req_state == EC_REQUEST_BUSY) {
+-        printf("SOE request busy\n");
++        printf("SOE %s request busy\n", verb);
+     } else if(req_state == EC_REQUEST_UNUSED) {
+-        printf("SOE request unused\n");
++        printf("SOE %s request unused\n", verb);
+     }
+ 
+     if(req_state != EC_REQUEST_BUSY) {
+-        printf("Requesting SOE read\n");
+-        memset(ecrt_soe_request_data(soe_req), 0x00, ecrt_soe_request_data_size(soe_req));
+-        ecrt_soe_request_read(soe_req);
++        printf("Requesting SOE %s\n", verb);
++        if(!write){
++            memset(ecrt_soe_request_data(soe_req), 0x00, ecrt_soe_request_data_size(soe_req));
++            ecrt_soe_request_read(soe_req);
++        } else {
++            memcpy(ecrt_soe_request_data(soe_req), &write_data, sizeof(write_data));
++            ecrt_soe_request_write_with_size(soe_req, sizeof(write_data));
++        }
+     }
+ }
+ 
+@@ -127,7 +119,9 @@ void cyclic_task()
+         counter--;
+     } else { // do this at 1 Hz
+         counter = FREQUENCY;
+-        check_request();
++        check_request(soe_req_read, 0);
++        check_request(soe_req_write, 1);
++        blink++;
+     }
+ 
+     ecrt_master_send(master);
+@@ -160,6 +154,7 @@ int main(int argc, char **argv)
+     struct timespec wakeup_time;
+     int ret = 0;
+ 
++
+     master = ecrt_request_master(0);
+     if (!master) {
+         return -1;
+@@ -170,11 +165,22 @@ int main(int argc, char **argv)
+         return -1;
+     }
+ 
+-    if (!(soe_req = ecrt_slave_config_create_soe_request(sc, 0, 0x71, sizeof(uint32_t)))) {
+-        fprintf(stderr, "Failed to create soe request.\n");
++    if (!(soe_req_read = ecrt_slave_config_create_soe_request(sc, 0, 0x71, sizeof(uint32_t)))) {
++        fprintf(stderr, "Failed to create read soe request.\n");
+         return -1;
+     }
+ 
++    if (!(sc = ecrt_master_slave_config(master, 0, 7, 0x00000002, 0x14566012))) {
++        fprintf(stderr, "Failed to get slave configuration.\n");
++        return -1;
++    }
++
++    if (!(soe_req_write = ecrt_slave_config_create_soe_request(sc, 0, 0x63, sizeof(uint16_t)))) {
++        fprintf(stderr, "Failed to create write soe request.\n");
++        return -1;
++    }
++
++
+     printf("Activating master...\n");
+     if (ecrt_master_activate(master)) {
+         return -1;
+-- 
+2.25.1
+

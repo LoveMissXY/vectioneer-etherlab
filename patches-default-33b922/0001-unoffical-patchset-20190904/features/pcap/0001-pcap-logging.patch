@@ -1,0 +1,590 @@
+From: Graeme Foot <graeme.foot@touchcut.com>
+Date: Thu, 09 May 2019 12:27:23 +1200
+
+log the first 30mb of EtherCAT comms to pcap format
+
+read the pcap data to binary output
+
+pcap file format spec:
+https://wiki.wireshark.org/Development/LibpcapFileFormat
+
+diff --git a/master/device.c b/master/device.c
+--- a/master/device.c
++++ b/master/device.c
+@@ -38,6 +38,7 @@
+ #include <linux/skbuff.h>
+ #include <linux/if_ether.h>
+ #include <linux/netdevice.h>
++#include <linux/jiffies.h>
+ 
+ #include "device.h"
+ #include "master.h"
+@@ -342,6 +343,33 @@ void ec_device_send(
+         EC_MASTER_DBG(device->master, 2, "Sending frame:\n");
+         ec_print_data(skb->data, ETH_HLEN + size);
+     }
++    // check theres enough room to copy frame to pcap mem
++    if (unlikely(device->master->pcap_data)) {
++        // get current data pointer
++        void *curr_data = device->master->pcap_curr_data;
++        int available = PCAP_SIZE - (curr_data - device->master->pcap_data);
++        int reqd = skb->len + sizeof(pcaprec_hdr_t);
++        if (unlikely(reqd <= available)) {
++            pcaprec_hdr_t *pcaphdr;
++            struct timeval t;
++            
++            // update curr data pointer
++            device->master->pcap_curr_data = curr_data + reqd;
++            
++            // fill in pcap frame header info
++            pcaphdr = curr_data;
++            jiffies_to_timeval(device->jiffies_poll, &t);
++            pcaphdr->ts_sec   = t.tv_sec;
++            pcaphdr->ts_usec  = t.tv_usec;
++            pcaphdr->incl_len = skb->len;
++            pcaphdr->orig_len = skb->len;
++            curr_data += sizeof(pcaprec_hdr_t);
++          
++            // copy frame
++            memcpy(curr_data, skb->data, skb->len);
++        }
++    }
++    
+ 
+     // start sending
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
+@@ -657,6 +685,32 @@ void ecdev_receive(
+         EC_MASTER_DBG(device->master, 2, "Received frame:\n");
+         ec_print_data(data, size);
+     }
++    // check theres enough room to copy frame to pcap mem
++    if (unlikely(device->master->pcap_data)) {
++        // get current data pointer
++        void *curr_data = device->master->pcap_curr_data;
++        int available = PCAP_SIZE - (curr_data - device->master->pcap_data);
++        int reqd = size + sizeof(pcaprec_hdr_t);
++        if (unlikely(reqd <= available)) {
++            pcaprec_hdr_t *pcaphdr;
++            struct timeval t;
++          
++            // update curr data pointer
++            device->master->pcap_curr_data = curr_data + reqd;
++            
++            // fill in pcap frame header info
++            pcaphdr = curr_data;
++            jiffies_to_timeval(device->jiffies_poll, &t);
++            pcaphdr->ts_sec   = t.tv_sec;
++            pcaphdr->ts_usec  = t.tv_usec;
++            pcaphdr->incl_len = size;
++            pcaphdr->orig_len = size;
++            curr_data += sizeof(pcaprec_hdr_t);
++          
++            // copy frame
++            memcpy(curr_data, data, size);
++        }
++    }
+ 
+ #ifdef EC_DEBUG_IF
+     ec_debug_send(&device->dbg, data, size);
+diff --git a/master/device.h b/master/device.h
+--- a/master/device.h
++++ b/master/device.h
+@@ -131,6 +131,35 @@ struct ec_device
+ 
+ /*****************************************************************************/
+ 
++/**
++   pcap global header
++*/
++
++typedef struct {
++    u32 magic_number;   /* magic number */
++    u16 version_major;  /* major version number */
++    u16 version_minor;  /* minor version number */
++    s32 thiszone;       /* GMT to local correction */
++    u32 sigfigs;        /* accuracy of timestamps */
++    u32 snaplen;        /* max length of captured packets, in octets */
++    u32 network;        /* data link type */
++} pcap_hdr_t;
++
++/*****************************************************************************/
++
++/**
++   pcap packet header
++*/
++
++typedef struct {
++    u32 ts_sec;         /* timestamp seconds */
++    u32 ts_usec;        /* timestamp microseconds */
++    u32 incl_len;       /* number of octets of packet saved in file */
++    u32 orig_len;       /* actual length of packet */
++} pcaprec_hdr_t;
++
++/*****************************************************************************/
++
+ int ec_device_init(ec_device_t *, ec_master_t *);
+ void ec_device_clear(ec_device_t *);
+ 
+diff --git a/master/ioctl.c b/master/ioctl.c
+--- a/master/ioctl.c
++++ b/master/ioctl.c
+@@ -194,6 +194,13 @@ static ATTRIBUTES int ec_ioctl_master(
+     io.ref_clock =
+         master->dc_ref_clock ? master->dc_ref_clock->ring_position : 0xffff;
+ 
++    if (master->pcap_data) {
++        io.pcap_size = sizeof(pcap_hdr_t) +
++                (master->pcap_curr_data - master->pcap_data);
++    } else {
++        io.pcap_size = 0;
++    }
++
+     if (copy_to_user((void __user *) arg, &io, sizeof(io))) {
+         return -EFAULT;
+     }
+@@ -679,6 +686,81 @@ static ATTRIBUTES int ec_ioctl_domain_da
+ 
+ /*****************************************************************************/
+ 
++/** Get pcap data.
++ *
++ * \return Zero on success, otherwise a negative error code.
++ */
++static ATTRIBUTES int ec_ioctl_pcap_data(
++        ec_master_t *master, /**< EtherCAT master. */
++        void *arg /**< Userspace address to store the results. */
++        )
++{
++    ec_ioctl_pcap_data_t data;
++    pcap_hdr_t pcaphdr;
++    size_t data_size;
++    size_t total_size;
++    void *curr_data = master->pcap_curr_data;
++
++    if (!master->pcap_data) {
++        return -EFAULT;
++    }
++
++    if (copy_from_user(&data, (void __user *) arg, sizeof(data))) {
++        return -EFAULT;
++    }
++
++    if (ec_lock_down_interruptible(&master->master_sem))
++        return -EINTR;
++
++    data_size = curr_data - master->pcap_data;
++    total_size = sizeof(pcap_hdr_t) + data_size;
++    if (data.data_size < sizeof(pcap_hdr_t)) {
++        ec_lock_up(&master->master_sem);
++        EC_MASTER_ERR(master, "Pcap data size too small %u/%zu!\n",
++                data.data_size, sizeof(pcap_hdr_t));
++        return -EFAULT;
++    }
++    if (data.data_size > total_size) {
++        ec_lock_up(&master->master_sem);
++        EC_MASTER_ERR(master, "Pcap data size too large %u/%zu!\n",
++                data.data_size, total_size);
++        return -EFAULT;
++    }
++    
++    // fill in pcap header and copy to user mem
++    pcaphdr.magic_number = 0xa1b2c3d4;
++    pcaphdr.version_major = 2;
++    pcaphdr.version_minor = 4;
++    pcaphdr.thiszone = 0;
++    pcaphdr.sigfigs = 0;
++    pcaphdr.snaplen = 65535;
++    pcaphdr.network = 1;
++    if (copy_to_user((void __user *) data.target, &pcaphdr,
++                sizeof(pcap_hdr_t))) {
++        ec_lock_up(&master->master_sem);
++        return -EFAULT;
++    }
++    
++    // copy pcap data, up to requested size
++    if ( (data_size > 0) &&
++         copy_to_user((void __user *) (data.target + sizeof(pcap_hdr_t)),
++                master->pcap_data, data.data_size - sizeof(pcap_hdr_t))) {
++        ec_lock_up(&master->master_sem);
++        return -EFAULT;
++    }
++    
++    // remove copied data?
++    // Note: will remove any data that has not been copied
++    if (data.reset_data) {
++        master->pcap_curr_data = master->pcap_data;
++    }
++
++    ec_lock_up(&master->master_sem);
++    return 0;
++}
++
++/*****************************************************************************/
++
+ /** Set master debug level.
+  *
+  * \return Zero on success, otherwise a negative error code.
+@@ -5295,6 +5377,9 @@ long EC_IOCTL(
+         case EC_IOCTL_DOMAIN_DATA:
+             ret = ec_ioctl_domain_data(master, arg);
+             break;
++        case EC_IOCTL_PCAP_DATA:
++            ret = ec_ioctl_pcap_data(master, arg);
++            break;
+         case EC_IOCTL_MASTER_DEBUG:
+             if (!ctx->writable) {
+                 ret = -EPERM;
+diff --git a/master/ioctl.h b/master/ioctl.h
+--- a/master/ioctl.h
++++ b/master/ioctl.h
+@@ -186,6 +186,8 @@
+ #define EC_IOCTL_EOE_DELIF            EC_IOWR(0x71, ec_ioctl_eoe_if_t)
+ #endif
+ 
++#define EC_IOCTL_PCAP_DATA          EC_IOWR(0x72, ec_ioctl_pcap_data_t)
++
+ /*****************************************************************************/
+ 
+ #define EC_IOCTL_STRING_SIZE 64
+@@ -236,6 +238,7 @@ typedef struct {
+     uint64_t app_time;
+     uint64_t dc_ref_time;
+     uint16_t ref_clock;
++    uint32_t pcap_size;
+ } ec_ioctl_master_t;
+ 
+ /*****************************************************************************/
+@@ -378,6 +381,15 @@ typedef struct {
+ 
+ typedef struct {
+     // inputs
++    uint32_t data_size;
++    uint8_t reset_data;
++    uint8_t *target;
++} ec_ioctl_pcap_data_t;
++
++/*****************************************************************************/
++
++typedef struct {
++    // inputs
+     uint16_t slave_position;
+     uint8_t al_state;
+ } ec_ioctl_slave_state_t;
+diff --git a/master/master.c b/master/master.c
+--- a/master/master.c
++++ b/master/master.c
+@@ -44,6 +44,7 @@
+ #include <linux/device.h>
+ #include <linux/version.h>
+ #include <linux/hrtimer.h>
++#include <linux/vmalloc.h>
+ 
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
+ #include <linux/sched/types.h> // struct sched_param
+@@ -231,6 +232,14 @@ int ec_master_init(ec_master_t *master, 
+     master->stats.unmatched = 0;
+     master->stats.output_jiffies = 0;
+ 
++    // set up pcap debugging
++    if (PCAP_SIZE > 0) {
++        master->pcap_data = vmalloc(PCAP_SIZE);
++    } else {
++        master->pcap_data = NULL;
++    }
++    master->pcap_curr_data = master->pcap_data;
++    
+     master->thread = NULL;
+ 
+ #ifdef EC_EOE
+@@ -450,6 +459,12 @@ void ec_master_clear(
+             dev_idx++) {
+         ec_device_clear(&master->devices[dev_idx]);
+     }
++    
++    if (master->pcap_data) {
++        vfree(master->pcap_data);
++        master->pcap_data = NULL;
++        master->pcap_curr_data = NULL;
++    }
+ }
+ 
+ /*****************************************************************************/
+diff --git a/master/master.h b/master/master.h
+--- a/master/master.h
++++ b/master/master.h
+@@ -131,6 +131,10 @@
+ 
+ #define EOE_STH_PENDING 2
+ 
++/** Set pcap debugging cache size. (30mb)
++ */
++#define PCAP_SIZE 30000000
++
+ /*****************************************************************************/
+ 
+ /** EtherCAT master phase.
+@@ -309,6 +313,8 @@ struct ec_master {
+ 
+     unsigned int debug_level; /**< Master debug level. */
+     ec_stats_t stats; /**< Cyclic statistics. */
++    void *pcap_data; /**< pcap debug output memory pointer */
++    void *pcap_curr_data; /**< pcap debug output current memory pointer */
+ 
+     struct task_struct *thread; /**< Master thread. */
+ 
+diff --git a/tool/CommandPcap.cpp b/tool/CommandPcap.cpp
+new file mode 100644
+--- /dev/null
++++ b/tool/CommandPcap.cpp
+@@ -0,0 +1,118 @@
++/*****************************************************************************
++ *
++ *  $Id$
++ *
++ *  Copyright (C) 2006-2009  Florian Pose, Ingenieurgemeinschaft IgH
++ *
++ *  This file is part of the IgH EtherCAT Master.
++ *
++ *  The IgH EtherCAT Master is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License version 2, as
++ *  published by the Free Software Foundation.
++ *
++ *  The IgH EtherCAT Master is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
++ *  Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License along
++ *  with the IgH EtherCAT Master; if not, write to the Free Software
++ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ *  ---
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ *  vim: expandtab
++ *
++ ****************************************************************************/
++
++#include <iostream>
++using namespace std;
++
++#include "CommandPcap.h"
++#include "MasterDevice.h"
++
++/*****************************************************************************/
++
++CommandPcap::CommandPcap():
++    Command("pcap", "Output binary pcap capture data.")
++{
++}
++
++/*****************************************************************************/
++
++string CommandPcap::helpString(const string &binaryBaseName) const
++{
++    stringstream str;
++
++    str << binaryBaseName << " " << getName() << " [OPTIONS]" << endl
++        << endl
++        << getBriefDescription() << endl
++        << endl
++        << "Command-specific options:" << endl
++        << "  --reset  -r   Flushes the retrieved pcap data and continues logging." << endl
++        << endl;
++
++    return str.str();
++}
++
++/****************************************************************************/
++
++void CommandPcap::execute(const StringVector &args)
++{
++    MasterIndexList masterIndices;
++
++    if (args.size() > 1) {
++        stringstream err;
++        err << "'" << getName() << "' takes max one argument!";
++        throwInvalidUsageException(err);
++    }
++
++    masterIndices = getMasterIndices();
++    MasterIndexList::const_iterator mi;
++    for (mi = masterIndices.begin();
++            mi != masterIndices.end(); mi++) {
++        ec_ioctl_master_t io;
++        MasterDevice m(*mi);
++        m.open(MasterDevice::Read);
++        m.getMaster(&io);
++
++        outputPcapData(m, io.pcap_size);
++    }
++}
++
++/****************************************************************************/
++
++void CommandPcap::outputPcapData(
++        MasterDevice &m,
++        unsigned int pcap_size
++        )
++{
++    ec_ioctl_pcap_data_t data;
++    unsigned char pcap_reset = getReset();
++    unsigned char *pcap_data;
++    unsigned int i;
++
++    if (!pcap_size)
++        return;
++      
++    pcap_data = new unsigned char[pcap_size];
++
++    try {
++        m.getPcap(&data, pcap_reset, pcap_size, pcap_data);
++    } catch (MasterDeviceException &e) {
++        delete [] pcap_data;
++        throw e;
++    }
++
++    for (i = 0; i < data.data_size; i++)
++        cout << pcap_data[i];
++    cout.flush();
++
++    delete [] pcap_data;
++}
++
++/****************************************************************************/
+diff --git a/tool/CommandPcap.h b/tool/CommandPcap.h
+new file mode 100644
+--- /dev/null
++++ b/tool/CommandPcap.h
+@@ -0,0 +1,52 @@
++/*****************************************************************************
++ *
++ *  $Id$
++ *
++ *  Copyright (C) 2006-2009  Florian Pose, Ingenieurgemeinschaft IgH
++ *
++ *  This file is part of the IgH EtherCAT Master.
++ *
++ *  The IgH EtherCAT Master is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License version 2, as
++ *  published by the Free Software Foundation.
++ *
++ *  The IgH EtherCAT Master is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
++ *  Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License along
++ *  with the IgH EtherCAT Master; if not, write to the Free Software
++ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ *  ---
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ ****************************************************************************/
++
++#ifndef __COMMANDPCAP_H__
++#define __COMMANDPCAP_H__
++
++#include "Command.h"
++
++/****************************************************************************/
++
++class CommandPcap:
++    public Command
++{
++    public:
++        CommandPcap();
++
++        string helpString(const string &) const;
++        void execute(const StringVector &);
++
++    protected:
++        void outputPcapData(MasterDevice &, unsigned int);
++};
++
++/****************************************************************************/
++
++#endif
+diff --git a/tool/Makefile.am b/tool/Makefile.am
+--- a/tool/Makefile.am
++++ b/tool/Makefile.am
+@@ -51,6 +51,7 @@ ethercat_SOURCES = \
+ 	CommandFoeWrite.cpp \
+ 	CommandGraph.cpp \
+ 	CommandMaster.cpp \
++	CommandPcap.cpp \
+ 	CommandPdos.cpp \
+ 	CommandRegRead.cpp \
+ 	CommandRegWrite.cpp \
+@@ -91,6 +92,7 @@ noinst_HEADERS = \
+ 	CommandFoeWrite.h \
+ 	CommandGraph.h \
+ 	CommandMaster.h \
++	CommandPcap.h \
+ 	CommandPdos.h \
+ 	CommandRegRead.h \
+ 	CommandRegWrite.h \
+diff --git a/tool/MasterDevice.cpp b/tool/MasterDevice.cpp
+--- a/tool/MasterDevice.cpp
++++ b/tool/MasterDevice.cpp
+@@ -251,6 +251,22 @@ void MasterDevice::getData(ec_ioctl_doma
+ 
+ /****************************************************************************/
+ 
++void MasterDevice::getPcap(ec_ioctl_pcap_data_t *data,
++        unsigned char resetData, unsigned int dataSize, unsigned char *mem)
++{
++    data->reset_data = resetData;
++    data->data_size = dataSize;
++    data->target = mem;
++
++    if (ioctl(fd, EC_IOCTL_PCAP_DATA, data) < 0) {
++        stringstream err;
++        err << "Failed to get pcap data: " << strerror(errno);
++        throw MasterDeviceException(err);
++    }
++}
++
++/****************************************************************************/
++
+ void MasterDevice::getSlave(ec_ioctl_slave_t *slave, uint16_t slaveIndex)
+ {
+     slave->position = slaveIndex;
+diff --git a/tool/MasterDevice.h b/tool/MasterDevice.h
+--- a/tool/MasterDevice.h
++++ b/tool/MasterDevice.h
+@@ -138,6 +138,8 @@ class MasterDevice
+         void getFmmu(ec_ioctl_domain_fmmu_t *, unsigned int, unsigned int);
+         void getData(ec_ioctl_domain_data_t *, unsigned int, unsigned int,
+                 unsigned char *);
++        void getPcap(ec_ioctl_pcap_data_t *, unsigned char, unsigned int,
++                unsigned char *);
+         void getSlave(ec_ioctl_slave_t *, uint16_t);
+         void getSync(ec_ioctl_slave_sync_t *, uint16_t, uint8_t);
+         void getPdo(ec_ioctl_slave_sync_pdo_t *, uint16_t, uint8_t, uint8_t);
+diff --git a/tool/main.cpp b/tool/main.cpp
+--- a/tool/main.cpp
++++ b/tool/main.cpp
+@@ -56,6 +56,7 @@ using namespace std;
+ # include "CommandIp.h"
+ #endif
+ #include "CommandMaster.h"
++#include "CommandPcap.h"
+ #include "CommandPdos.h"
+ #include "CommandRegRead.h"
+ #include "CommandRegWrite.h"
+@@ -321,6 +322,7 @@ int main(int argc, char **argv)
+     commandList.push_back(new CommandIp());
+ #endif
+     commandList.push_back(new CommandMaster());
++    commandList.push_back(new CommandPcap());
+     commandList.push_back(new CommandPdos());
+     commandList.push_back(new CommandRegRead());
+     commandList.push_back(new CommandRegWrite());

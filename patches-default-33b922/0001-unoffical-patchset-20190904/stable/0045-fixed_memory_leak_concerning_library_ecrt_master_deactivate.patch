@@ -1,0 +1,176 @@
+# HG changeset patch
+# User Florian Pose
+# Date 1560508972 -7200
+#      Fri Jun 14 12:42:52 2019 +0200
+Fixed memory leak concerning library ecrt_master_deactivate().
+(grafted from 0c011dc6dbc4facb3ee75f100181ce89814ecefa)
+
+diff --git a/lib/master.c b/lib/master.c
+--- a/lib/master.c
++++ b/lib/master.c
+@@ -1,8 +1,6 @@
+ /*****************************************************************************
+  *
+- *  $Id$
+- *
+- *  Copyright (C) 2006-2012  Florian Pose, Ingenieurgemeinschaft IgH
++ *  Copyright (C) 2006-2019  Florian Pose, Ingenieurgemeinschaft IgH
+  *
+  *  This file is part of the IgH EtherCAT master userspace library.
+  *
+@@ -69,6 +67,7 @@ void ec_master_clear_config(ec_master_t 
+     while (d) {
+         next_d = d->next;
+         ec_domain_clear(d);
++        free(d);
+         d = next_d;
+     }
+     master->first_domain = NULL;
+@@ -77,9 +76,16 @@ void ec_master_clear_config(ec_master_t 
+     while (c) {
+         next_c = c->next;
+         ec_slave_config_clear(c);
++        free(c);
+         c = next_c;
+     }
+     master->first_config = NULL;
++
++    if (master->process_data)  {
++        munmap(master->process_data, master->process_data_size);
++        master->process_data = NULL;
++        master->process_data_size = 0;
++    }
+ }
+ 
+ /****************************************************************************/
+@@ -94,6 +100,7 @@ void ec_master_clear(ec_master_t *master
+ #else
+         close(master->fd);
+ #endif
++        master->fd = -1;
+     }
+ }
+ 
+@@ -409,7 +416,7 @@ int ecrt_master_sdo_download(ec_master_t
+             *abort_code = download.abort_code;
+         }
+         fprintf(stderr, "Failed to execute SDO download: %s\n",
+-            strerror(EC_IOCTL_ERRNO(ret)));
++                strerror(EC_IOCTL_ERRNO(ret)));
+         return -EC_IOCTL_ERRNO(ret);
+     }
+ 
+@@ -438,7 +445,7 @@ int ecrt_master_sdo_download_complete(ec
+             *abort_code = download.abort_code;
+         }
+         fprintf(stderr, "Failed to execute SDO download: %s\n",
+-            strerror(EC_IOCTL_ERRNO(ret)));
++                strerror(EC_IOCTL_ERRNO(ret)));
+         return -EC_IOCTL_ERRNO(ret);
+     }
+ 
+diff --git a/lib/reg_request.c b/lib/reg_request.c
+--- a/lib/reg_request.c
++++ b/lib/reg_request.c
+@@ -1,8 +1,6 @@
+ /******************************************************************************
+  *
+- *  $Id$
+- *
+- *  Copyright (C) 2012  Florian Pose, Ingenieurgemeinschaft IgH
++ *  Copyright (C) 2012-2019  Florian Pose, Ingenieurgemeinschaft IgH
+  *
+  *  This file is part of the IgH EtherCAT master userspace library.
+  *
+@@ -48,6 +46,7 @@ void ec_reg_request_clear(ec_reg_request
+ {
+     if (reg->data) {
+         free(reg->data);
++        reg->data = NULL;
+     }
+ }
+ 
+diff --git a/lib/sdo_request.c b/lib/sdo_request.c
+--- a/lib/sdo_request.c
++++ b/lib/sdo_request.c
+@@ -1,8 +1,6 @@
+ /******************************************************************************
+  *
+- *  $Id$
+- *
+- *  Copyright (C) 2006-2012  Florian Pose, Ingenieurgemeinschaft IgH
++ *  Copyright (C) 2006-2019  Florian Pose, Ingenieurgemeinschaft IgH
+  *
+  *  This file is part of the IgH EtherCAT master userspace library.
+  *
+@@ -48,6 +46,7 @@ void ec_sdo_request_clear(ec_sdo_request
+ {
+     if (req->data) {
+         free(req->data);
++        req->data = NULL;
+     }
+ }
+ 
+diff --git a/lib/slave_config.c b/lib/slave_config.c
+--- a/lib/slave_config.c
++++ b/lib/slave_config.c
+@@ -1,8 +1,6 @@
+ /******************************************************************************
+  *
+- *  $Id$
+- *
+- *  Copyright (C) 2006-2012  Florian Pose, Ingenieurgemeinschaft IgH
++ *  Copyright (C) 2006-2019  Florian Pose, Ingenieurgemeinschaft IgH
+  *
+  *  This file is part of the IgH EtherCAT master userspace library.
+  *
+@@ -53,22 +51,28 @@ void ec_slave_config_clear(ec_slave_conf
+     while (r) {
+         next_r = r->next;
+         ec_sdo_request_clear(r);
++        free(r);
+         r = next_r;
+     }
++    sc->first_sdo_request = NULL;
+ 
+     e = sc->first_reg_request;
+     while (e) {
+         next_e = e->next;
+         ec_reg_request_clear(e);
++        free(e);
+         e = next_e;
+     }
++    sc->first_reg_request = NULL;
+ 
+     v = sc->first_voe_handler;
+     while (v) {
+         next_v = v->next;
+         ec_voe_handler_clear(v);
++        free(v);
+         v = next_v;
+     }
++    sc->first_voe_handler = NULL;
+ }
+ 
+ /*****************************************************************************/
+diff --git a/lib/voe_handler.c b/lib/voe_handler.c
+--- a/lib/voe_handler.c
++++ b/lib/voe_handler.c
+@@ -1,8 +1,6 @@
+ /******************************************************************************
+  *
+- *  $Id$
+- *
+- *  Copyright (C) 2006-2012  Florian Pose, Ingenieurgemeinschaft IgH
++ *  Copyright (C) 2006-2019  Florian Pose, Ingenieurgemeinschaft IgH
+  *
+  *  This file is part of the IgH EtherCAT master userspace library.
+  *
+@@ -49,6 +47,7 @@ void ec_voe_handler_clear(ec_voe_handler
+ {
+     if (voe->data) {
+         free(voe->data);
++        voe->data = NULL;
+     }
+ }
+ 

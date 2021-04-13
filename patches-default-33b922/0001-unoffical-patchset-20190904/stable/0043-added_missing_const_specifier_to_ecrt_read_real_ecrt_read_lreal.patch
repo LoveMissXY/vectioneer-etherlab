@@ -1,0 +1,49 @@
+# HG changeset patch
+# User Florian Pose
+# Date 1548161320 -3600
+#      Tue Jan 22 13:48:40 2019 +0100
+Added missing const specifier to ecrt_read_real() / ecrt_read_lreal().
+(grafted from 6ac5b581f1d52b6a4aca3271bb853ec61d5f6c70)
+
+diff --git a/include/ecrt.h b/include/ecrt.h
+--- a/include/ecrt.h
++++ b/include/ecrt.h
+@@ -2213,7 +2213,7 @@ void ecrt_reg_request_read(
+  * \param data EtherCAT data pointer
+  * \return EtherCAT data value
+  */
+-float ecrt_read_real(void *data);
++float ecrt_read_real(const void *data);
+ 
+ /** Read a 32-bit floating-point value from EtherCAT data.
+  *
+@@ -2227,7 +2227,7 @@ float ecrt_read_real(void *data);
+  * \param data EtherCAT data pointer
+  * \return EtherCAT data value
+  */
+-double ecrt_read_lreal(void *data);
++double ecrt_read_lreal(const void *data);
+ 
+ /** Read a 64-bit floating-point value from EtherCAT data.
+  *
+diff --git a/lib/common.c b/lib/common.c
+--- a/lib/common.c
++++ b/lib/common.c
+@@ -138,7 +138,7 @@ void ecrt_release_master(ec_master_t *ma
+ 
+ /*****************************************************************************/
+ 
+-float ecrt_read_real(void *data)
++float ecrt_read_real(const void *data)
+ {
+     uint32_t raw = EC_READ_U32(data);
+     return *(float *) (const void *) &raw;
+@@ -146,7 +146,7 @@ float ecrt_read_real(void *data)
+ 
+ /*****************************************************************************/
+ 
+-double ecrt_read_lreal(void *data)
++double ecrt_read_lreal(const void *data)
+ {
+     uint64_t raw = EC_READ_U64(data);
+     return *(double *) (const void *) &raw;

@@ -1,0 +1,10 @@
+base/0001-Add-individual-request-of-slave-operational-state.patch
+base/0002-Add-object_code-to-sdo-information-object.patch
+base/0003-Add-sdo-info-access-to-user-api-for-ethercat-library.patch
+base/0004-Add-a-function-to-trigger-bus-rescanning.patch
+#base/0005-increased-datagram-timeout-which-is-necessary-for-so.patch # disabled
+base/0006-SII-file-write-support.patch
+base/0007-FoE-support.patch
+base/0008-Add-master-library-support-for-uploading-slave-dicti.patch
+#base/0009-Increase-the-EC-IO-timeout-to-100ms.patch # disabled
+#base/0010-Port-to-kernel-v5.patch # disabled

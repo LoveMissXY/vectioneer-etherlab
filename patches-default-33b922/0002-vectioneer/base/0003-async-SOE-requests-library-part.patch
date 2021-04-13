@@ -1,0 +1,482 @@
+From 4e1c519c0e4d1c6590b92f0bc00879ee3dc2925b Mon Sep 17 00:00:00 2001
+From: Mikhail Rudenko <mike.rudenko@gmail.com>
+Date: Mon, 7 Dec 2020 01:14:08 +0300
+Subject: [PATCH 3/9] async SOE requests: library part
+
+---
+ include/ecrt.h     |  17 +++++
+ lib/Makefile.am    |   1 +
+ lib/master.c       |  15 +++--
+ lib/slave_config.c |  81 +++++++++++++++++++++++
+ lib/slave_config.h |   1 +
+ lib/soe_request.c  | 162 +++++++++++++++++++++++++++++++++++++++++++++
+ lib/soe_request.h  |  50 ++++++++++++++
+ 7 files changed, 320 insertions(+), 7 deletions(-)
+ create mode 100644 lib/soe_request.c
+ create mode 100644 lib/soe_request.h
+
+diff --git a/include/ecrt.h b/include/ecrt.h
+index 3aa0916..154d25d 100644
+--- a/include/ecrt.h
++++ b/include/ecrt.h
+@@ -1842,6 +1842,23 @@ ec_reg_request_t *ecrt_slave_config_create_reg_request(
+         size_t size /**< Data size to reserve. */
+         );
+ 
++/** Create an SOE request to exchange SOEs during realtime operation.
++ *
++ * The created SOE request object is freed automatically when the master is
++ * released.
++ *
++ * This method has to be called in non-realtime context before
++ * ecrt_master_activate().
++ *
++ * \return New SOE request, or NULL on error.
++ */
++ec_soe_request_t *ecrt_slave_config_create_soe_request(
++        ec_slave_config_t *sc, /**< Slave configuration. */
++        uint8_t drive_no, /**< SOE drive_no. */
++        uint16_t idn, /**< SOE idn. */
++        size_t size /**< Data size to reserve. */
++        );
++
+ /** Outputs the state of the slave configuration.
+  *
+  * Stores the state information in the given \a state structure. The state
+diff --git a/lib/Makefile.am b/lib/Makefile.am
+index 1ac398e..b60dfea 100644
+--- a/lib/Makefile.am
++++ b/lib/Makefile.am
+@@ -39,6 +39,7 @@ libethercat_la_SOURCES = \
+ 	foe_request.c \
+ 	reg_request.c \
+ 	sdo_request.c \
++	soe_request.c \
+ 	slave_config.c \
+ 	voe_handler.c
+ 
+diff --git a/lib/master.c b/lib/master.c
+index 29dcbee..96f1015 100644
+--- a/lib/master.c
++++ b/lib/master.c
+@@ -203,6 +203,7 @@ ec_slave_config_t *ecrt_master_slave_config(ec_master_t *master,
+     sc->first_foe_request = NULL;
+     sc->first_reg_request = NULL;
+     sc->first_voe_handler = NULL;
++    sc->first_soe_request = NULL;
+ 
+     ec_master_add_slave_config(master, sc);
+ 
+@@ -755,7 +756,7 @@ size_t ecrt_master_send_ext(ec_master_t *master)
+ int ecrt_master_eoe_is_open(ec_master_t *master)
+ {
+     int ret;
+-    
++
+     ret = ioctl(master->fd, EC_IOCTL_EOE_IS_OPEN, NULL);
+     if (EC_IOCTL_IS_ERROR(ret)) {
+         EC_PRINT_ERR("Failed to check if an eoe is open: %s\n",
+@@ -764,13 +765,13 @@ int ecrt_master_eoe_is_open(ec_master_t *master)
+ 
+     return ret;
+ }
+-        
++
+ /****************************************************************************/
+ 
+ int ecrt_master_eoe_process(ec_master_t *master)
+ {
+     int ret;
+-    
++
+     ret = ioctl(master->fd, EC_IOCTL_EOE_PROCESS, NULL);
+     if (EC_IOCTL_IS_ERROR(ret)) {
+         EC_PRINT_ERR("Failed to process eoe handlers: %s\n",
+@@ -781,7 +782,7 @@ int ecrt_master_eoe_process(ec_master_t *master)
+ }
+ 
+ #endif
+-        
++
+ /****************************************************************************/
+ 
+ #ifdef EC_EOE
+@@ -792,7 +793,7 @@ int ecrt_master_eoe_addif(ec_master_t *master, uint16_t alias, uint16_t posn)
+     ec_ioctl_eoe_if_t data;
+     data.alias = alias;
+     data.position = posn;
+-    
++
+     ret = ioctl(master->fd, EC_IOCTL_EOE_ADDIF, &data);
+     if (EC_IOCTL_IS_ERROR(ret)) {
+         EC_PRINT_ERR("Failed to add EoE interface: %s\n",
+@@ -810,7 +811,7 @@ int ecrt_master_eoe_delif(ec_master_t *master, uint16_t alias, uint16_t posn)
+     ec_ioctl_eoe_if_t data;
+     data.alias = alias;
+     data.position = posn;
+-    
++
+     ret = ioctl(master->fd, EC_IOCTL_EOE_DELIF, &data);
+     if (EC_IOCTL_IS_ERROR(ret)) {
+         EC_PRINT_ERR("Failed to add EoE interface: %s\n",
+@@ -965,7 +966,7 @@ int ecrt_master_64bit_reference_clock_time(ec_master_t *master,
+     // we use EAGAIN to inform the user that the ref clock is not ready yet.
+     // also we only report the first error of its kind, otherwise the errors
+     // will flood the logs
+-    if ( (ret != lastErr64BitRefClk) && EC_IOCTL_IS_ERROR(ret) && 
++    if ( (ret != lastErr64BitRefClk) && EC_IOCTL_IS_ERROR(ret) &&
+          (EC_IOCTL_ERRNO(ret) != EAGAIN) ) {
+         EC_PRINT_ERR("Failed to get 64bit reference clock time: %s\n",
+                 strerror(EC_IOCTL_ERRNO(ret)));
+diff --git a/lib/slave_config.c b/lib/slave_config.c
+index cef50b6..717e2b9 100644
+--- a/lib/slave_config.c
++++ b/lib/slave_config.c
+@@ -38,6 +38,7 @@
+ #include "foe_request.h"
+ #include "reg_request.h"
+ #include "voe_handler.h"
++#include "soe_request.h"
+ #include "master.h"
+ 
+ /*****************************************************************************/
+@@ -48,6 +49,7 @@ void ec_slave_config_clear(ec_slave_config_t *sc)
+     ec_foe_request_t *f, *next_f;
+     ec_reg_request_t *e, *next_e;
+     ec_voe_handler_t *v, *next_v;
++    ec_soe_request_t *s, *next_s;
+ 
+     r = sc->first_sdo_request;
+     while (r) {
+@@ -82,6 +84,16 @@ void ec_slave_config_clear(ec_slave_config_t *sc)
+         v = next_v;
+     }
+     sc->first_voe_handler = NULL;
++
++    s = sc->first_soe_request;
++    while (s) {
++        next_s = s->next;
++        ec_soe_request_clear(s);
++        free(s);
++        s = next_s;
++    }
++    sc->first_soe_request = NULL;
++
+ }
+ 
+ /*****************************************************************************/
+@@ -634,6 +646,75 @@ ec_sdo_request_t *ecrt_slave_config_create_sdo_request(ec_slave_config_t *sc,
+ 
+ /*****************************************************************************/
+ 
++void ec_slave_config_add_soe_request(ec_slave_config_t *sc,
++        ec_soe_request_t *req)
++{
++    if (sc->first_soe_request) {
++        ec_soe_request_t *r = sc->first_soe_request;
++        while (r->next) {
++            r = r->next;
++        }
++        r->next = req;
++    } else {
++        sc->first_soe_request = req;
++    }
++}
++
++/*****************************************************************************/
++ec_soe_request_t *ecrt_slave_config_create_soe_request(
++        ec_slave_config_t *sc, uint8_t drive_no, uint16_t idn, size_t size)
++{
++    ec_ioctl_soe_request_t data;
++    ec_soe_request_t *req;
++    int ret;
++
++    req = malloc(sizeof(ec_soe_request_t));
++    if (!req) {
++        EC_PRINT_ERR("Failed to allocate memory.\n");
++        return 0;
++    }
++
++    if (size) {
++        req->data = malloc(size);
++        if (!req->data) {
++            EC_PRINT_ERR("Failed to allocate %zu bytes of SDO data"
++                    " memory.\n", size);
++            free(req);
++            return 0;
++        }
++    } else {
++        req->data = NULL;
++    }
++
++    data.config_index = sc->index;
++    data.drive_no = drive_no;
++    data.idn = idn;
++    data.size = size;
++
++    ret = ioctl(sc->master->fd, EC_IOCTL_SC_SOE_REQUEST, &data);
++    if (EC_IOCTL_IS_ERROR(ret)) {
++        EC_PRINT_ERR("Failed to create SDO request: %s\n",
++                strerror(EC_IOCTL_ERRNO(ret)));
++        ec_soe_request_clear(req);
++        free(req);
++        return NULL;
++    }
++
++    req->next = NULL;
++    req->config = sc;
++    req->index = data.request_index;
++    req->drive_no = data.drive_no;
++    req->idn = data.idn;
++    req->data_size = size;
++    req->mem_size = size;
++
++    ec_slave_config_add_soe_request(sc, req);
++
++    return req;
++}
++
++/*****************************************************************************/
++
+ ec_sdo_request_t *ecrt_slave_config_create_sdo_request_complete(ec_slave_config_t *sc,
+         uint16_t index, size_t size)
+ {
+diff --git a/lib/slave_config.h b/lib/slave_config.h
+index ffe91a9..75ef925 100644
+--- a/lib/slave_config.h
++++ b/lib/slave_config.h
+@@ -42,6 +42,7 @@ struct ec_slave_config {
+     ec_foe_request_t *first_foe_request;
+     ec_reg_request_t *first_reg_request;
+     ec_voe_handler_t *first_voe_handler;
++    ec_soe_request_t *first_soe_request;
+ };
+ 
+ /*****************************************************************************/
+diff --git a/lib/soe_request.c b/lib/soe_request.c
+new file mode 100644
+index 0000000..c5c107c
+--- /dev/null
++++ b/lib/soe_request.c
+@@ -0,0 +1,162 @@
++/******************************************************************************
++ *
++ *  Copyright (C) 2006-2019  Florian Pose, Ingenieurgemeinschaft IgH
++ *
++ *  This file is part of the IgH EtherCAT master userspace library.
++ *
++ *  The IgH EtherCAT master userspace library is free software; you can
++ *  redistribute it and/or modify it under the terms of the GNU Lesser General
++ *  Public License as published by the Free Software Foundation; version 2.1
++ *  of the License.
++ *
++ *  The IgH EtherCAT master userspace library is distributed in the hope that
++ *  it will be useful, but WITHOUT ANY WARRANTY; without even the implied
++ *  warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU Lesser General Public License for more details.
++ *
++ *  You should have received a copy of the GNU Lesser General Public License
++ *  along with the IgH EtherCAT master userspace library. If not, see
++ *  <http://www.gnu.org/licenses/>.
++ *
++ *  ---
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ *****************************************************************************/
++
++/** \file
++ * SERCOS over EtherCAT SOE request functions.
++ */
++
++/*****************************************************************************/
++
++#include <stdio.h>
++#include <string.h>
++
++#include "ioctl.h"
++#include "soe_request.h"
++#include "slave_config.h"
++#include "master.h"
++
++/*****************************************************************************/
++
++void ec_soe_request_clear(ec_soe_request_t *req)
++{
++    if (req->data) {
++        free(req->data);
++        req->data = NULL;
++    }
++}
++
++/*****************************************************************************
++ * Application interface.
++ ****************************************************************************/
++
++uint8_t *ecrt_soe_request_data(ec_soe_request_t *req)
++{
++    return req->data;
++}
++
++/*****************************************************************************/
++
++size_t ecrt_soe_request_data_size(const ec_soe_request_t *req)
++{
++    return req->data_size;
++}
++
++/*****************************************************************************/
++
++ec_request_state_t ecrt_soe_request_state(ec_soe_request_t *req)
++{
++    ec_ioctl_soe_request_t data;
++    int ret;
++
++    data.config_index = req->config->index;
++    data.request_index = req->index;
++
++    ret = ioctl(req->config->master->fd, EC_IOCTL_SOE_REQUEST_STATE, &data);
++    if (EC_IOCTL_IS_ERROR(ret)) {
++        EC_PRINT_ERR("Failed to get SOE request state: %s\n",
++                strerror(EC_IOCTL_ERRNO(ret)));
++        return EC_REQUEST_ERROR;
++    }
++
++    if (data.size) { // new data waiting to be copied
++        if (req->mem_size < data.size) {
++            EC_PRINT_ERR("Received %zu bytes do not fit info SOE data"
++                    " memory (%zu bytes)!\n", data.size, req->mem_size);
++            return EC_REQUEST_ERROR;
++        }
++
++        data.data = req->data;
++
++        ret = ioctl(req->config->master->fd,
++                EC_IOCTL_SOE_REQUEST_DATA, &data);
++        if (EC_IOCTL_IS_ERROR(ret)) {
++            EC_PRINT_ERR("Failed to get SOE data: %s\n",
++                    strerror(EC_IOCTL_ERRNO(ret)));
++            return EC_REQUEST_ERROR;
++        }
++        req->data_size = data.size;
++    }
++
++    return data.state;
++}
++/*****************************************************************************/
++
++void ecrt_soe_request_read(ec_soe_request_t *req)
++{
++    ec_ioctl_soe_request_t data;
++    int ret;
++
++    data.config_index = req->config->index;
++    data.request_index = req->index;
++
++    ret = ioctl(req->config->master->fd, EC_IOCTL_SOE_REQUEST_READ, &data);
++    if (EC_IOCTL_IS_ERROR(ret)) {
++        EC_PRINT_ERR("Failed to command an SOE read operation : %s\n",
++                strerror(EC_IOCTL_ERRNO(ret)));
++    }
++}
++
++/*****************************************************************************/
++
++void ecrt_soe_request_write(ec_soe_request_t *req)
++{
++    ec_ioctl_soe_request_t data;
++    int ret;
++
++    data.config_index = req->config->index;
++    data.request_index = req->index;
++    data.data = req->data;
++    data.size = req->data_size;
++
++    ret = ioctl(req->config->master->fd, EC_IOCTL_SOE_REQUEST_WRITE, &data);
++    if (EC_IOCTL_IS_ERROR(ret)) {
++        EC_PRINT_ERR("Failed to command an SOE write operation : %s\n",
++                strerror(EC_IOCTL_ERRNO(ret)));
++    }
++}
++
++/*****************************************************************************/
++
++void ecrt_soe_request_write_with_size(ec_soe_request_t *req, size_t size)
++{
++    ec_ioctl_soe_request_t data;
++    int ret;
++
++    data.config_index = req->config->index;
++    data.request_index = req->index;
++    data.data = req->data;
++    data.size = size;
++
++    ret = ioctl(req->config->master->fd, EC_IOCTL_SOE_REQUEST_WRITE, &data);
++    if (EC_IOCTL_IS_ERROR(ret)) {
++        EC_PRINT_ERR("Failed to command an SOE write operation : %s\n",
++                strerror(EC_IOCTL_ERRNO(ret)));
++    }
++}
++
++/*****************************************************************************/
+diff --git a/lib/soe_request.h b/lib/soe_request.h
+new file mode 100644
+index 0000000..999fa64
+--- /dev/null
++++ b/lib/soe_request.h
+@@ -0,0 +1,50 @@
++/******************************************************************************
++ *
++ *  $Id$
++ *
++ *  Copyright (C) 2006-2009  Florian Pose, Ingenieurgemeinschaft IgH
++ *
++ *  This file is part of the IgH EtherCAT master userspace library.
++ *
++ *  The IgH EtherCAT master userspace library is free software; you can
++ *  redistribute it and/or modify it under the terms of the GNU Lesser General
++ *  Public License as published by the Free Software Foundation; version 2.1
++ *  of the License.
++ *
++ *  The IgH EtherCAT master userspace library is distributed in the hope that
++ *  it will be useful, but WITHOUT ANY WARRANTY; without even the implied
++ *  warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ *  GNU Lesser General Public License for more details.
++ *
++ *  You should have received a copy of the GNU Lesser General Public License
++ *  along with the IgH EtherCAT master userspace library. If not, see
++ *  <http://www.gnu.org/licenses/>.
++ *
++ *  ---
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ *****************************************************************************/
++
++#include "include/ecrt.h"
++
++/*****************************************************************************/
++
++struct ec_soe_request {
++    ec_soe_request_t *next; /**< List header. */
++    ec_slave_config_t *config; /**< Parent slave configuration. */
++    unsigned int index; /**< Request index (identifier). */
++    uint8_t drive_no; /**< SOE drive_no. */
++    uint16_t idn; /**< SOE idn */
++    uint8_t *data; /**< Pointer to SOE data. */
++    size_t mem_size; /**< Size of SOE data memory. */
++    size_t data_size; /**< Size of SOE data. */
++};
++
++/*****************************************************************************/
++
++void ec_soe_request_clear(ec_soe_request_t *);
++
++/*****************************************************************************/
+-- 
+2.25.1
+

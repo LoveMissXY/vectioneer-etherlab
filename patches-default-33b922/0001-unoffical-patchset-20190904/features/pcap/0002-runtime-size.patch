@@ -1,0 +1,283 @@
+From: Gavin Lambert <gavin.lambert@tomra.com>
+Date: Wed Sep 04 16:31:59 2019 +1200
+
+Make pcap logging size a runtime configuration parameter, for convenience.
+
+diff --git a/master/device.c b/master/device.c
+--- a/master/device.c
++++ b/master/device.c
+@@ -306,6 +306,45 @@ int ec_device_close(
+ 
+ /*****************************************************************************/
+ 
++/** Records a packet in the master's pcap buffer, if there is room.
++ */
++
++static void pcap_record(
++            ec_device_t *device, /**< EtherCAT device */
++            const void *data, /**< Packet data */
++            size_t size /**< Packet size */
++            )
++{
++    // check there's enough room to copy frame to pcap mem
++    if (unlikely(device->master->pcap_data)) {
++        // get current data pointer
++        void *curr_data = device->master->pcap_curr_data;
++        long available = pcap_size - (curr_data - device->master->pcap_data);
++        long reqd = size + sizeof(pcaprec_hdr_t);
++        if (unlikely(reqd <= available)) {
++            pcaprec_hdr_t *pcaphdr;
++            struct timeval t;
++          
++            // update curr data pointer
++            device->master->pcap_curr_data = curr_data + reqd;
++            
++            // fill in pcap frame header info
++            pcaphdr = curr_data;
++            jiffies_to_timeval(device->jiffies_poll, &t);
++            pcaphdr->ts_sec   = t.tv_sec;
++            pcaphdr->ts_usec  = t.tv_usec;
++            pcaphdr->incl_len = size;
++            pcaphdr->orig_len = size;
++            curr_data += sizeof(pcaprec_hdr_t);
++          
++            // copy frame
++            memcpy(curr_data, data, size);
++        }
++    }
++}
++
++/*****************************************************************************/
++
+ /** Returns a pointer to the device's transmit memory.
+  *
+  * \return pointer to the TX socket buffer
+@@ -343,33 +382,6 @@ void ec_device_send(
+         EC_MASTER_DBG(device->master, 2, "Sending frame:\n");
+         ec_print_data(skb->data, ETH_HLEN + size);
+     }
+-    // check theres enough room to copy frame to pcap mem
+-    if (unlikely(device->master->pcap_data)) {
+-        // get current data pointer
+-        void *curr_data = device->master->pcap_curr_data;
+-        int available = PCAP_SIZE - (curr_data - device->master->pcap_data);
+-        int reqd = skb->len + sizeof(pcaprec_hdr_t);
+-        if (unlikely(reqd <= available)) {
+-            pcaprec_hdr_t *pcaphdr;
+-            struct timeval t;
+-            
+-            // update curr data pointer
+-            device->master->pcap_curr_data = curr_data + reqd;
+-            
+-            // fill in pcap frame header info
+-            pcaphdr = curr_data;
+-            jiffies_to_timeval(device->jiffies_poll, &t);
+-            pcaphdr->ts_sec   = t.tv_sec;
+-            pcaphdr->ts_usec  = t.tv_usec;
+-            pcaphdr->incl_len = skb->len;
+-            pcaphdr->orig_len = skb->len;
+-            curr_data += sizeof(pcaprec_hdr_t);
+-          
+-            // copy frame
+-            memcpy(curr_data, skb->data, skb->len);
+-        }
+-    }
+-    
+ 
+     // start sending
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 29)
+@@ -383,6 +395,7 @@ void ec_device_send(
+         device->master->device_stats.tx_count++;
+         device->tx_bytes += ETH_HLEN + size;
+         device->master->device_stats.tx_bytes += ETH_HLEN + size;
++        pcap_record(device, skb->data, ETH_HLEN + size);
+ #ifdef EC_DEBUG_IF
+         ec_debug_send(&device->dbg, skb->data, ETH_HLEN + size);
+ #endif
+@@ -685,33 +698,8 @@ void ecdev_receive(
+         EC_MASTER_DBG(device->master, 2, "Received frame:\n");
+         ec_print_data(data, size);
+     }
+-    // check theres enough room to copy frame to pcap mem
+-    if (unlikely(device->master->pcap_data)) {
+-        // get current data pointer
+-        void *curr_data = device->master->pcap_curr_data;
+-        int available = PCAP_SIZE - (curr_data - device->master->pcap_data);
+-        int reqd = size + sizeof(pcaprec_hdr_t);
+-        if (unlikely(reqd <= available)) {
+-            pcaprec_hdr_t *pcaphdr;
+-            struct timeval t;
+-          
+-            // update curr data pointer
+-            device->master->pcap_curr_data = curr_data + reqd;
+-            
+-            // fill in pcap frame header info
+-            pcaphdr = curr_data;
+-            jiffies_to_timeval(device->jiffies_poll, &t);
+-            pcaphdr->ts_sec   = t.tv_sec;
+-            pcaphdr->ts_usec  = t.tv_usec;
+-            pcaphdr->incl_len = size;
+-            pcaphdr->orig_len = size;
+-            curr_data += sizeof(pcaprec_hdr_t);
+-          
+-            // copy frame
+-            memcpy(curr_data, data, size);
+-        }
+-    }
+ 
++    pcap_record(device, data, size);
+ #ifdef EC_DEBUG_IF
+     ec_debug_send(&device->dbg, data, size);
+ #endif
+diff --git a/master/master.c b/master/master.c
+--- a/master/master.c
++++ b/master/master.c
+@@ -233,8 +233,8 @@ int ec_master_init(ec_master_t *master, 
+     master->stats.output_jiffies = 0;
+ 
+     // set up pcap debugging
+-    if (PCAP_SIZE > 0) {
+-        master->pcap_data = vmalloc(PCAP_SIZE);
++    if (pcap_size > 0) {
++        master->pcap_data = vmalloc(pcap_size);
+     } else {
+         master->pcap_data = NULL;
+     }
+diff --git a/master/master.h b/master/master.h
+--- a/master/master.h
++++ b/master/master.h
+@@ -131,10 +131,6 @@
+ 
+ #define EOE_STH_PENDING 2
+ 
+-/** Set pcap debugging cache size. (30mb)
+- */
+-#define PCAP_SIZE 30000000
+-
+ /*****************************************************************************/
+ 
+ /** EtherCAT master phase.
+@@ -313,6 +309,7 @@ struct ec_master {
+ 
+     unsigned int debug_level; /**< Master debug level. */
+     ec_stats_t stats; /**< Cyclic statistics. */
++
+     void *pcap_data; /**< pcap debug output memory pointer */
+     void *pcap_curr_data; /**< pcap debug output current memory pointer */
+ 
+@@ -438,6 +435,7 @@ extern char *eoe_interfaces[MAX_EOE]; //
+ extern unsigned int eoe_count; // see module.c
+ extern bool eoe_autocreate; // see module.c
+ #endif
++extern unsigned long pcap_size;  // see module.c
+ 
+ /*****************************************************************************/
+ 
+diff --git a/master/module.c b/master/module.c
+--- a/master/module.c
++++ b/master/module.c
+@@ -64,6 +64,7 @@ unsigned int eoe_count; /**< Number of E
+ bool eoe_autocreate = 1;  /**< Auto-create EOE interfaces. */
+ #endif
+ static unsigned int debug_level;  /**< Debug level parameter. */
++unsigned long pcap_size;  /**< Pcap buffer size in bytes. */
+ 
+ static ec_master_t *masters; /**< Array of masters. */
+ static ec_lock_t master_sem; /**< Master semaphore. */
+@@ -96,6 +97,8 @@ MODULE_PARM_DESC(eoe_autocreate, "EOE at
+ #endif
+ module_param_named(debug_level, debug_level, uint, S_IRUGO);
+ MODULE_PARM_DESC(debug_level, "Debug level");
++module_param_named(pcap_size, pcap_size, ulong, S_IRUGO);
++MODULE_PARM_DESC(pcap_size, "Pcap buffer size");
+ 
+ /** \endcond */
+ 
+diff --git a/script/ethercat.conf b/script/ethercat.conf
+--- a/script/ethercat.conf
++++ b/script/ethercat.conf
+@@ -66,6 +66,17 @@ MASTER0_DEVICE=""
+ #EOE_AUTOCREATE="1"
+ 
+ #
++# PCAP logging size
++#
++# Sets how much memory (in mebibytes) to reserve for PCAP logging (default 0).
++# This is a non-overwriting log of raw packets which can be downloaded (and
++# cleared, to receive additional packets) using the "ethercat pcap" command,
++# and then can be transferred to another host running Wireshark or another
++# libpcap-compatible tool.
++#
++#PCAP_SIZE_MB="30"
++
++#
+ # Ethernet driver modules to use for EtherCAT operation.
+ #
+ # Specify a non-empty list of Ethernet drivers, that shall be used for
+diff --git a/script/ethercatctl.in b/script/ethercatctl.in
+--- a/script/ethercatctl.in
++++ b/script/ethercatctl.in
+@@ -109,6 +109,12 @@ start)
+         EOE_AUTOCREATE_CMD="eoe_autocreate=${EOE_AUTOCREATE}"
+     fi
+ 
++    # build pcap command
++    PCAP_SIZE_CMD=""
++    if [ -n "${PCAP_SIZE_MB}" ]; then
++        PCAP_SIZE_CMD="pcap_size=$(expr ${PCAP_SIZE_MB} '*' 1048576)"
++    fi
++
+     # Set link state UP on selected devices
+     if [ -n "${LINK_DEVICES}" ]; then
+         for LINK_DEVICE in ${LINK_DEVICES}; do
+@@ -119,7 +125,7 @@ start)
+     # load master module
+     if ! ${MODPROBE} ${MODPROBE_FLAGS} ec_master \
+             main_devices=${DEVICES} backup_devices=${BACKUPS} \
+-            ${EOE_INTERFACES_CMD} ${EOE_AUTOCREATE_CMD}; then
++            ${EOE_INTERFACES_CMD} ${EOE_AUTOCREATE_CMD} ${PCAP_SIZE_CMD}; then
+         exit 1
+     fi
+ 
+diff --git a/script/init.d/ethercat.in b/script/init.d/ethercat.in
+--- a/script/init.d/ethercat.in
++++ b/script/init.d/ethercat.in
+@@ -188,10 +188,16 @@ start)
+         EOE_AUTOCREATE_CMD="eoe_autocreate=${EOE_AUTOCREATE}"
+     fi
+ 
++    # build pcap command
++    PCAP_SIZE_CMD=""
++    if [ -n "${PCAP_SIZE_MB}" ]; then
++        PCAP_SIZE_CMD="pcap_size=$(expr ${PCAP_SIZE_MB} '*' 1048576)"
++    fi
++
+     # load master module
+     if ! ${MODPROBE} ${MODPROBE_FLAGS} ec_master ${MASTER_ARGS} \
+             main_devices=${DEVICES} backup_devices=${BACKUPS} \
+-            ${EOE_INTERFACES_CMD} ${EOE_AUTOCREATE_CMD}; then
++            ${EOE_INTERFACES_CMD} ${EOE_AUTOCREATE_CMD} ${PCAP_SIZE_CMD}; then
+         exit_fail
+     fi
+ 
+diff --git a/script/sysconfig/ethercat b/script/sysconfig/ethercat
+--- a/script/sysconfig/ethercat
++++ b/script/sysconfig/ethercat
+@@ -66,6 +66,17 @@ MASTER0_DEVICE=""
+ #EOE_AUTOCREATE="1"
+ 
+ #
++# PCAP logging size
++#
++# Sets how much memory (in mebibytes) to reserve for PCAP logging (default 0).
++# This is a non-overwriting log of raw packets which can be downloaded (and
++# cleared, to receive additional packets) using the "ethercat pcap" command,
++# and then can be transferred to another host running Wireshark or another
++# libpcap-compatible tool.
++#
++#PCAP_SIZE_MB="30"
++
++#
+ # Ethernet driver modules to use for EtherCAT operation.
+ #
+ # Specify a non-empty list of Ethernet drivers, that shall be used for

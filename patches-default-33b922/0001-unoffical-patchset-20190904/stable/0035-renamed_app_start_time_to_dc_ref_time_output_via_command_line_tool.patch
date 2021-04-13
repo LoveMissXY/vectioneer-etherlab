@@ -1,0 +1,153 @@
+# HG changeset patch
+# User Florian Pose <fp@igh.de>
+# Date 1543249038 -3600
+#      Mon Nov 26 17:17:18 2018 +0100
+Renamed app_start_time to dc_ref_time; output via command-line tool.
+(grafted from 7a3794bab00fcf3be2cec59ab79508dbb5582249)
+
+diff --git a/master/fsm_master.c b/master/fsm_master.c
+--- a/master/fsm_master.c
++++ b/master/fsm_master.c
+@@ -1200,7 +1200,7 @@ void ec_fsm_master_enter_write_system_ti
+ {
+     ec_master_t *master = fsm->master;
+ 
+-    if (master->has_app_time) {
++    if (master->dc_ref_time) {
+ 
+         while (fsm->slave < master->slaves + master->slave_count) {
+             if (!fsm->slave->base_dc_supported
+@@ -1224,7 +1224,7 @@ void ec_fsm_master_enter_write_system_ti
+ 
+     } else {
+         if (master->active) {
+-            EC_MASTER_WARN(master, "No app_time received up to now,"
++            EC_MASTER_WARN(master, "No application time received up to now,"
+                     " but master already active.\n");
+         } else {
+             EC_MASTER_DBG(master, 1, "No app_time received up to now.\n");
+diff --git a/master/fsm_slave_config.c b/master/fsm_slave_config.c
+--- a/master/fsm_slave_config.c
++++ b/master/fsm_slave_config.c
+@@ -1417,30 +1417,28 @@ void ec_fsm_slave_config_state_dc_sync_c
+                 abs_sync_diff, diff_ms);
+     }
+ 
+-    // set DC start time
++    // set DC start time (roughly in the future, not in-phase)
+     start_time = master->app_time + EC_DC_START_OFFSET; // now + X ns
+-    // FIXME use slave's local system time here?
+ 
+     if (sync0->cycle_time) {
+         // find correct phase
+-        if (master->has_app_time) {
++        if (master->dc_ref_time) {
+             u64 diff, start;
+             u32 remainder, cycle;
+ 
+-            diff = start_time - master->app_start_time;
++            diff = start_time - master->dc_ref_time;
+             cycle = sync0->cycle_time + sync1->cycle_time;
+             remainder = do_div(diff, cycle);
+ 
+             start = start_time + cycle - remainder + sync0->shift_time;
+ 
+-            EC_SLAVE_DBG(slave, 1, "app_start_time=%llu\n",
+-                    master->app_start_time);
+-            EC_SLAVE_DBG(slave, 1, "      app_time=%llu\n", master->app_time);
+-            EC_SLAVE_DBG(slave, 1, "    start_time=%llu\n", start_time);
+-            EC_SLAVE_DBG(slave, 1, "         cycle=%u\n", cycle);
+-            EC_SLAVE_DBG(slave, 1, "    shift_time=%i\n", sync0->shift_time);
+-            EC_SLAVE_DBG(slave, 1, "     remainder=%u\n", remainder);
+-            EC_SLAVE_DBG(slave, 1, "         start=%llu\n", start);
++            EC_SLAVE_DBG(slave, 1, "   ref_time=%llu\n", master->dc_ref_time);
++            EC_SLAVE_DBG(slave, 1, "   app_time=%llu\n", master->app_time);
++            EC_SLAVE_DBG(slave, 1, " start_time=%llu\n", start_time);
++            EC_SLAVE_DBG(slave, 1, "      cycle=%u\n", cycle);
++            EC_SLAVE_DBG(slave, 1, " shift_time=%i\n", sync0->shift_time);
++            EC_SLAVE_DBG(slave, 1, "  remainder=%u\n", remainder);
++            EC_SLAVE_DBG(slave, 1, "       start=%llu\n", start);
+             start_time = start;
+         } else {
+             EC_SLAVE_WARN(slave, "No application time supplied."
+diff --git a/master/ioctl.c b/master/ioctl.c
+--- a/master/ioctl.c
++++ b/master/ioctl.c
+@@ -180,6 +180,7 @@ static ATTRIBUTES int ec_ioctl_master(
+     up(&master->device_sem);
+ 
+     io.app_time = master->app_time;
++    io.dc_ref_time = master->dc_ref_time;
+     io.ref_clock =
+         master->dc_ref_clock ? master->dc_ref_clock->ring_position : 0xffff;
+ 
+diff --git a/master/ioctl.h b/master/ioctl.h
+--- a/master/ioctl.h
++++ b/master/ioctl.h
+@@ -203,6 +203,7 @@ typedef struct {
+     int32_t rx_byte_rates[EC_RATE_COUNT];
+     int32_t loss_rates[EC_RATE_COUNT];
+     uint64_t app_time;
++    uint64_t dc_ref_time;
+     uint16_t ref_clock;
+ } ec_ioctl_master_t;
+ 
+diff --git a/master/master.c b/master/master.c
+--- a/master/master.c
++++ b/master/master.c
+@@ -184,8 +184,7 @@ int ec_master_init(ec_master_t *master, 
+     INIT_LIST_HEAD(&master->domains);
+ 
+     master->app_time = 0ULL;
+-    master->app_start_time = 0ULL;
+-    master->has_app_time = 0;
++    master->dc_ref_time = 0ULL;
+ 
+     master->scan_busy = 0;
+     master->allow_scan = 1;
+@@ -2424,8 +2423,7 @@ void ecrt_master_deactivate(ec_master_t 
+ #endif
+ 
+     master->app_time = 0ULL;
+-    master->app_start_time = 0ULL;
+-    master->has_app_time = 0;
++    master->dc_ref_time = 0ULL;
+ 
+ #ifdef EC_EOE
+     if (eoe_was_running) {
+@@ -2786,9 +2784,8 @@ void ecrt_master_application_time(ec_mas
+ {
+     master->app_time = app_time;
+ 
+-    if (unlikely(!master->has_app_time)) {
+-        master->app_start_time = app_time;
+-        master->has_app_time = 1;
++    if (unlikely(!master->dc_ref_time)) {
++        master->dc_ref_time = app_time;
+     }
+ }
+ 
+diff --git a/master/master.h b/master/master.h
+--- a/master/master.h
++++ b/master/master.h
+@@ -236,8 +236,7 @@ struct ec_master {
+     struct list_head domains; /**< List of domains. */
+ 
+     u64 app_time; /**< Time of the last ecrt_master_sync() call. */
+-    u64 app_start_time; /**< Application start time. */
+-    u8 has_app_time; /**< Application time is valid. */
++    u64 dc_ref_time; /**< Common reference timestamp for DC start times. */
+     ec_datagram_t ref_sync_datagram; /**< Datagram used for synchronizing the
+                                        reference clock to the master clock. */
+     ec_datagram_t sync_datagram; /**< Datagram used for DC drift
+diff --git a/tool/CommandMaster.cpp b/tool/CommandMaster.cpp
+--- a/tool/CommandMaster.cpp
++++ b/tool/CommandMaster.cpp
+@@ -264,6 +264,7 @@ void CommandMaster::execute(const String
+             cout << "None";
+         }
+         cout << endl
++            << "    DC reference time: " << data.dc_ref_time << endl
+             << "    Application time: " << data.app_time << endl
+             << "                      ";
+ 

@@ -1,0 +1,18 @@
+# HG changeset patch
+# User Florian Pose
+# Date 1539862523 -7200
+#      Thu Oct 18 13:35:23 2018 +0200
+TODO.
+(grafted from 336936da11b84408527cb6b8a1e896e8954b2ba4)
+
+diff --git a/TODO b/TODO
+--- a/TODO
++++ b/TODO
+@@ -10,6 +10,7 @@ vim700: spelllang=en spell
+ 
+ Future issues:
+ 
++* Improve redundancy_active doc in ecrt.h.
+ • Remove fprintf() calls from user-space library (define return codes).
+ • Move SII request to slave FSM.
+ • Move SDO request to slave FSM.
