@@ -1,0 +1,27 @@
+From 6a53ab11a6ee257cca980d962a9a11fdb4065017 Mon Sep 17 00:00:00 2001
+From: Sebastien BLANCHET <blanchet@iram.fr>
+Date: Thu, 8 Apr 2021 18:51:17 +0200
+Subject: [PATCH 17/24] doc: compile twice the documentation to update the TOC
+
+If you compile once the documentation, the table of contents is empty
+You have to compile twice to fill the table of contents.
+---
+ documentation/Makefile | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/documentation/Makefile b/documentation/Makefile
+index 42571a0b..eba9dc8c 100644
+--- a/documentation/Makefile
++++ b/documentation/Makefile
+@@ -56,6 +56,8 @@ pdf: $(EXT_FILES)
+ 	$(MAKE) -C images
+ 	$(MAKE) -C graphs
+ 	pdflatex $(LATEX_OPTIONS) $(FILE)
++# compile twice to update the table of contents
++	pdflatex $(LATEX_OPTIONS) $(FILE)
+ 
+ index:
+ 	makeindex $(FILE)
+-- 
+2.25.1
+

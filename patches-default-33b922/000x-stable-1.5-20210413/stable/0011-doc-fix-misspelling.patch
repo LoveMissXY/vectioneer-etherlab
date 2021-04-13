@@ -1,0 +1,25 @@
+From 5ccaaa82de63469ce9d1764ab6e1d7716d638151 Mon Sep 17 00:00:00 2001
+From: Sebastien Blanchet <blanchet@iram.fr>
+Date: Sun, 28 Mar 2021 22:11:42 +0200
+Subject: [PATCH 11/24] doc: fix misspelling
+
+---
+ documentation/ethercat_doc.tex | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/documentation/ethercat_doc.tex b/documentation/ethercat_doc.tex
+index 5238e8a2..fab0b8e8 100644
+--- a/documentation/ethercat_doc.tex
++++ b/documentation/ethercat_doc.tex
+@@ -2109,7 +2109,7 @@ up, the passing of new socket buffers is suspended with a call to
+ \paragraph{Creation of EoE Handlers}
+ 
+ During bus scanning (see \autoref{sec:fsm-scan}), the master determines the
+-supported mailbox protocols foe each slave. This is done by examining the
++supported mailbox protocols for each slave. This is done by examining the
+ ``Supported Mailbox Protocols'' mask field at word address 0x001C of the
+ SII\index{SII}. If bit 1 is set, the slave supports the EoE protocol. In this
+ case, an EoE handler is created for that slave.
+-- 
+2.25.1
+

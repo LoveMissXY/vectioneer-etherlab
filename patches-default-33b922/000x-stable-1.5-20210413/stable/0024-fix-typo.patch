@@ -1,0 +1,67 @@
+From af3794d8d68da06868056d246bfbaf3759e21d76 Mon Sep 17 00:00:00 2001
+From: Sebastien BLANCHET <blanchet@iram.fr>
+Date: Fri, 9 Apr 2021 19:07:29 +0200
+Subject: [PATCH 24/24] fix typo
+
+---
+ documentation/ethercat_doc.tex | 2 +-
+ tool/CommandDomains.cpp        | 2 +-
+ tool/CommandPdos.cpp           | 2 +-
+ tool/CommandSlaves.cpp         | 2 +-
+ 4 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/documentation/ethercat_doc.tex b/documentation/ethercat_doc.tex
+index faff6626..78dc404f 100644
+--- a/documentation/ethercat_doc.tex
++++ b/documentation/ethercat_doc.tex
+@@ -307,7 +307,7 @@ EtherCAT functionality (see \autoref{chap:api}).
+ 
+   \item Accessing IDNs via the command-line tool.
+ 
+-  \item Accessing IDNs at runtime via the the user-space library.
++  \item Accessing IDNs at runtime via the user-space library.
+ 
+   \end{itemize}
+ 
+diff --git a/tool/CommandDomains.cpp b/tool/CommandDomains.cpp
+index 13fc6cb3..2eb446cd 100644
+--- a/tool/CommandDomains.cpp
++++ b/tool/CommandDomains.cpp
+@@ -77,7 +77,7 @@ string CommandDomains::helpString(const string &binaryBaseName) const
+         << endl
+         << "Command-specific options:" << endl
+         << "  --domain  -d <index>  Positive numerical domain index." << endl
+-        << "                        If ommitted, all domains are" << endl
++        << "                        If omitted, all domains are" << endl
+         << "                        displayed." << endl
+         << endl
+         << "  --verbose -v          Show FMMUs and process data" << endl
+diff --git a/tool/CommandPdos.cpp b/tool/CommandPdos.cpp
+index 126b76c9..b805534e 100644
+--- a/tool/CommandPdos.cpp
++++ b/tool/CommandPdos.cpp
+@@ -64,7 +64,7 @@ string CommandPdos::helpString(const string &binaryBaseName) const
+         << "Enable 1" << endl
+         << endl
+         << "2) Assigned PDOs - PDO direction, hexadecimal index and" << endl
+-        << "   the PDO name, if avaliable. Note that a 'Tx' and 'Rx'" << endl
++        << "   the PDO name, if available. Note that a 'Tx' and 'Rx'" << endl
+         << "   are seen from the slave's point of view. Example:" << endl
+         << endl
+         << "   TxPDO 0x1a00 \"Channel1\"" << endl
+diff --git a/tool/CommandSlaves.cpp b/tool/CommandSlaves.cpp
+index ae3c68b4..e37efbcf 100644
+--- a/tool/CommandSlaves.cpp
++++ b/tool/CommandSlaves.cpp
+@@ -58,7 +58,7 @@ string CommandSlaves::helpString(const string &binaryBaseName) const
+         << endl
+         << "1  5555:0  PREOP  +  EL3162 2C. Ana. Input 0-10V" << endl
+         << "|  |    |  |      |  |" << endl
+-        << "|  |    |  |      |  \\- Name from the SII if avaliable," << endl
++        << "|  |    |  |      |  \\- Name from the SII if available," << endl
+         << "|  |    |  |      |     otherwise vendor ID and product" << endl
+         << "|  |    |  |      |     code (both hexadecimal)." << endl
+         << "|  |    |  |      \\- Error flag. '+' means no error," << endl
+-- 
+2.25.1
+

@@ -1,0 +1,94 @@
+From afb456fea7c5682ec273c717836a292c49712f7b Mon Sep 17 00:00:00 2001
+From: Bjarne von Horn <vh@igh.de>
+Date: Thu, 8 Apr 2021 17:35:04 +0200
+Subject: [PATCH 16/24] Add .pc file for ethercat lib
+
+---
+ configure.ac          |  2 ++
+ lib/Makefile.am       |  2 ++
+ lib/libethercat.pc.in | 40 ++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 44 insertions(+)
+ create mode 100644 lib/libethercat.pc.in
+
+diff --git a/configure.ac b/configure.ac
+index 5316a702..2fe8e14f 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -45,6 +45,7 @@ AM_INIT_AUTOMAKE([-Wall -Werror dist-bzip2 subdir-objects])
+ AC_CONFIG_HEADERS([config.h])
+ AC_CONFIG_SRCDIR([config.h.in])
+ AC_CONFIG_MACRO_DIR([m4])
++PKG_INSTALLDIR()
+ 
+ #------------------------------------------------------------------------------
+ # Global
+@@ -1461,6 +1462,7 @@ AC_CONFIG_FILES([
+         examples/xenomai_posix/Makefile
+         include/Makefile
+         lib/Makefile
++        lib/libethercat.pc
+         m4/Makefile
+         master/Kbuild
+         master/Makefile
+diff --git a/lib/Makefile.am b/lib/Makefile.am
+index 1ac398e5..29d4672c 100644
+--- a/lib/Makefile.am
++++ b/lib/Makefile.am
+@@ -75,6 +75,8 @@ libethercat_la_CFLAGS = -fno-strict-aliasing -Wall -I$(top_srcdir)
+ #
+ libethercat_la_LDFLAGS = -version-info 2:0:1
+ 
++pkgconfig_DATA = libethercat.pc
++
+ #------------------------------------------------------------------------------
+ 
+ if ENABLE_RTDM
+diff --git a/lib/libethercat.pc.in b/lib/libethercat.pc.in
+new file mode 100644
+index 00000000..54a20b98
+--- /dev/null
++++ b/lib/libethercat.pc.in
+@@ -0,0 +1,40 @@
++#
++#  pkgconfig file for ethercat library
++#
++#  Copyright 2021 Bjarne von Horn (vh at igh dot de)
++#
++#  This file is part of the ethercat library.
++#
++#  The ethercat library is free software: you can redistribute it and/or modify
++#  it under the terms of the GNU Lesser General Public License as published by
++#  the Free Software Foundation, either version 3 of the License, or (at your
++#  option) any later version.
++#
++#  The ethercat library is distributed in the hope that it will be useful, but
++#  WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++#  or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public
++#  License for more details.
++#
++#  You should have received a copy of the GNU Lesser General Public License
++#  along with the ethercat library. If not, see <http://www.gnu.org/licenses/>.
++#
++#  ---
++#
++#  The license mentioned above concerns the source code only. Using the
++#  EtherCAT technology and brand is only permitted in compliance with the
++#  industrial property and similar rights of Beckhoff Automation GmbH.
++#
++#  vim: tw=78 noexpandtab
++#
++
++prefix=@prefix@
++exec_prefix=@exec_prefix@
++libdir=@libdir@
++includedir=@includedir@
++
++Name: libethercat
++Description: Client support library for the EtherCAT Master
++URL: http://www.etherlab.org
++Version: @VERSION@
++Libs:  -L${libdir} -lethercat
++Cflags: -I${includedir}
+-- 
+2.25.1
+

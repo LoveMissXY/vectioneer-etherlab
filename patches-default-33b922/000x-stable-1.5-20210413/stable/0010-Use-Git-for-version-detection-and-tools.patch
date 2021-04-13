@@ -1,0 +1,232 @@
+From 717e029c6aada62251a9b7e7d77c5d95280fcbb6 Mon Sep 17 00:00:00 2001
+From: Florian Pose <fp@igh.de>
+Date: Wed, 17 Mar 2021 14:51:35 +0100
+Subject: [PATCH 10/24] Use Git for version detection and tools.
+
+---
+ Makefile.am                    |  8 ++++----
+ configure.ac                   |  2 +-
+ devices/Kbuild.in              |  2 +-
+ devices/e1000/Kbuild.in        |  2 +-
+ devices/e1000/update.sh        |  2 +-
+ devices/e1000e/Kbuild.in       |  2 +-
+ devices/e1000e/update.sh       |  2 +-
+ devices/igb/Kbuild.in          |  2 +-
+ devices/igb/update.sh          |  2 +-
+ devices/update.sh              |  2 +-
+ documentation/ethercat_doc.tex | 13 ++++++-------
+ master/Kbuild.in               |  2 +-
+ tool/Makefile.am               |  2 +-
+ tty/Kbuild.in                  |  2 +-
+ 14 files changed, 22 insertions(+), 23 deletions(-)
+
+diff --git a/Makefile.am b/Makefile.am
+index d70d3c45..c24995d2 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -96,13 +96,13 @@ clean-local:
+ 	$(MAKE) -C "$(LINUX_SOURCE_DIR)" M="@abs_srcdir@" clean
+ 
+ mydist:
+-	hg log --style=changelog $(srcdir) > ChangeLog
+-	@REV=`hg id -i $(srcdir)` && \
++	git -C $(srcdir) log > ChangeLog
++	@REV=`git -C $(srcdir) describe` && \
+ 		$(MAKE) dist-bzip2 distdir=$(PACKAGE)-$(VERSION)-$${REV}
+ 
+ dist-hook:
+-	if which hg >/dev/null 2>&1; then \
+-		hg id -i $(srcdir) 2>/dev/null >$(distdir)/revision; \
++	if which git >/dev/null 2>&1; then \
++		git -C $(srcdir) describe 2>/dev/null >$(distdir)/revision; \
+ 	fi
+ 
+ mrproper: clean cleandoc
+diff --git a/configure.ac b/configure.ac
+index e59cc7fc..5316a702 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -35,7 +35,7 @@ AC_PREREQ(2.59)
+ # - Write NEWS entry with changes since last release
+ # - Check for complete Doxygen comments
+ # - Update version number in documentation
+-# - Update the ChangeLog -> hg log -bstable-1.5 --style=changelog > ChangeLog
++# - Update the ChangeLog -> git log > ChangeLog
+ # - Update version number below
+ # - make dist-bzip2
+ #
+diff --git a/devices/Kbuild.in b/devices/Kbuild.in
+index d92202ef..4a60058a 100644
+--- a/devices/Kbuild.in
++++ b/devices/Kbuild.in
+@@ -34,7 +34,7 @@
+ REV := $(shell if test -s $(src)/../revision; then \
+ 		cat $(src)/../revision; \
+ 	else \
+-		hg id -i $(src)/.. 2>/dev/null || echo "unknown"; \
++		git -C $(src)/.. describe 2>/dev/null || echo "unknown"; \
+ 	fi)
+ 
+ ifeq (@ENABLE_GENERIC@,1)
+diff --git a/devices/e1000/Kbuild.in b/devices/e1000/Kbuild.in
+index 0878f05a..c460d79c 100644
+--- a/devices/e1000/Kbuild.in
++++ b/devices/e1000/Kbuild.in
+@@ -36,7 +36,7 @@ TOPDIR := $(src)/../..
+ REV := $(shell if test -s $(TOPDIR)/revision; then \
+ 		cat $(TOPDIR)/revision; \
+ 	else \
+-		hg id -i $(TOPDIR) 2>/dev/null || echo "unknown"; \
++		git -C $(TOPDIR) describe 2>/dev/null || echo "unknown"; \
+ 	fi)
+ 
+ ifeq (@ENABLE_E1000@,1)
+diff --git a/devices/e1000/update.sh b/devices/e1000/update.sh
+index bac1fd95..ad6b44f8 100755
+--- a/devices/e1000/update.sh
++++ b/devices/e1000/update.sh
+@@ -23,5 +23,5 @@ for f in $KERNELDIR/drivers/net/ethernet/intel/e1000/*.[ch]; do
+     ep=${b/\./-$PREVER-ethercat.}
+     diff -up $op $ep | patch -p1 $e
+     sed -i s/$PREVER-ethercat.h/$KERNELVER-ethercat.h/ $e
+-    hg add $o $e
++    git add $o $e
+ done
+diff --git a/devices/e1000e/Kbuild.in b/devices/e1000e/Kbuild.in
+index c09673f4..abe4bdbc 100644
+--- a/devices/e1000e/Kbuild.in
++++ b/devices/e1000e/Kbuild.in
+@@ -36,7 +36,7 @@ TOPDIR := $(src)/../..
+ REV := $(shell if test -s $(TOPDIR)/revision; then \
+ 		cat $(TOPDIR)/revision; \
+ 	else \
+-		hg id -i $(TOPDIR) 2>/dev/null || echo "unknown"; \
++		git -C $(TOPDIR) describe 2>/dev/null || echo "unknown"; \
+ 	fi)
+ 
+ ifeq (@ENABLE_E1000E@,1)
+diff --git a/devices/e1000e/update.sh b/devices/e1000e/update.sh
+index bae06b37..ec5b8bd3 100755
+--- a/devices/e1000e/update.sh
++++ b/devices/e1000e/update.sh
+@@ -23,5 +23,5 @@ for f in $KERNELDIR/drivers/net/ethernet/intel/e1000e/*.[ch]; do
+     ep=${b/\./-$PREVER-ethercat.}
+     diff -up $op $ep | patch -p1 $e
+     sed -i s/$PREVER-ethercat.h/$KERNELVER-ethercat.h/ $e
+-    hg add $o $e
++    git add $o $e
+ done
+diff --git a/devices/igb/Kbuild.in b/devices/igb/Kbuild.in
+index 616a9c2d..762ff49a 100644
+--- a/devices/igb/Kbuild.in
++++ b/devices/igb/Kbuild.in
+@@ -36,7 +36,7 @@ TOPDIR := $(src)/../..
+ REV := $(shell if test -s $(TOPDIR)/revision; then \
+ 		cat $(TOPDIR)/revision; \
+ 	else \
+-		hg id -i $(TOPDIR) 2>/dev/null || echo "unknown"; \
++		git -C $(TOPDIR) describe 2>/dev/null || echo "unknown"; \
+ 	fi)
+ 
+ ifeq (@ENABLE_IGB@,1)
+diff --git a/devices/igb/update.sh b/devices/igb/update.sh
+index f3f3489b..7edf9e98 100755
+--- a/devices/igb/update.sh
++++ b/devices/igb/update.sh
+@@ -26,5 +26,5 @@ for f in $FILES; do
+     ep=${f/\./-$PREVER-ethercat.}
+     diff -up $op $ep | patch -p1 $e
+     sed -i s/$PREVER-ethercat.h/$KERNELVER-ethercat.h/ $e
+-    hg add $o $e
++    git add $o $e
+ done
+diff --git a/devices/update.sh b/devices/update.sh
+index b6f1bcec..bb2a1ec3 100755
+--- a/devices/update.sh
++++ b/devices/update.sh
+@@ -22,5 +22,5 @@ for f in $KERNELDIR/drivers/net/ethernet/{realtek/8139too,realtek/r8169,intel/e1
+     op=${b/\./-$PREVER-orig.}
+     ep=${b/\./-$PREVER-ethercat.}
+     diff -up $op $ep | patch -p1 $e
+-    hg add $o $e
++    git add $o $e
+ done
+diff --git a/documentation/ethercat_doc.tex b/documentation/ethercat_doc.tex
+index 52d5b9fe..5238e8a2 100644
+--- a/documentation/ethercat_doc.tex
++++ b/documentation/ethercat_doc.tex
+@@ -3120,18 +3120,17 @@ the master's website\footnote{\url{http://etherlab.org/en/ethercat/index.php}}
+ at~the EtherLab project~\cite{etherlab} as a tarball.
+ 
+ \item The most recent development revision (and moreover any other revision)
+-can be obtained via the Mercurial~\cite{mercurial} repository on the master's
++can be obtained via the Git~\cite{git} repository on the master's
+ project page on
+-SourceForge.net\footnote{\url{http://sourceforge.net/projects/etherlabmaster}}.
++GitLab.com\footnote{\url{https://gitlab.com/etherlab.org/ethercat}}.
+ The whole repository can be cloned with the command
+ 
+ \begin{lstlisting}[breaklines=true]
+-hg clone http://etherlabmaster.hg.sourceforge.net/hgweb/etherlabmaster/etherlabmaster `\textit{local-dir}`
++git clone https://gitlab.com/etherlab.org/ethercat.git `\textit{local-dir}`
+ \end{lstlisting}
+ 
+-\item Without a local Mercurial installation, tarballs of arbitrary revisions
+-can be downloaded via the ``bz2'' links in the browsable repository
+-pages\footnote{\url{http://etherlabmaster.hg.sourceforge.net/hgweb/etherlabmaster/etherlabmaster}}.
++\item Without a local Git installation, tarballs of arbitrary revisions
++can be downloaded via the ``Download'' button on GitLab.
+ 
+ \end{enumerate}
+ 
+@@ -3474,7 +3473,7 @@ misunderstandings. In: IEE journal ``Computing and Control Engineering'',
+ \bibitem{doxygen} Doxygen. Source code documentation generator tool.
+ \url{http://www.stack.nl/~dimitri/doxygen}, 2008.
+ 
+-\bibitem{mercurial} Mercurial SCM. \url{http://mercurial.selenic.com}, 2010.
++\bibitem{git} Git SCM. \url{https://git-scm.com}, 2021.
+ 
+ \bibitem{autoconf} Autoconf -- GNU Project -- Free Software Foundation (FSF).
+ \url{http://www.gnu.org/software/autoconf}, 2010.
+diff --git a/master/Kbuild.in b/master/Kbuild.in
+index b75f5568..ebf017de 100644
+--- a/master/Kbuild.in
++++ b/master/Kbuild.in
+@@ -112,7 +112,7 @@ endif # ENABLE_RTDM
+ REV := $(shell if test -s $(src)/../revision; then \
+ 		cat $(src)/../revision; \
+ 	else \
+-		hg id -i $(src)/.. 2>/dev/null || echo "unknown"; \
++		git -C $(src)/.. describe 2>/dev/null || echo "unknown"; \
+ 	fi)
+ 
+ CFLAGS_module.o := -DREV=$(REV)
+diff --git a/tool/Makefile.am b/tool/Makefile.am
+index b1ddf39a..03630b3d 100644
+--- a/tool/Makefile.am
++++ b/tool/Makefile.am
+@@ -143,7 +143,7 @@ endif
+ REV = `if test -s $(top_srcdir)/revision; then \
+ 		cat $(top_srcdir)/revision; \
+ 	else \
+-		hg id -i $(top_srcdir) 2>/dev/null || echo "unknown"; \
++		git -C $(top_srcdir) describe 2>/dev/null || echo "unknown"; \
+ 	fi`
+ 
+ ethercat_CXXFLAGS = \
+diff --git a/tty/Kbuild.in b/tty/Kbuild.in
+index be00f8b7..16ddd0b6 100644
+--- a/tty/Kbuild.in
++++ b/tty/Kbuild.in
+@@ -39,7 +39,7 @@ ec_tty-objs := \
+ REV := $(shell if test -s $(src)/../revision; then \
+ 		cat $(src)/../revision; \
+ 	else \
+-		hg id -i $(src)/.. 2>/dev/null || echo "unknown"; \
++		git -C $(src)/.. describe 2>/dev/null || echo "unknown"; \
+ 	fi)
+ 
+ CFLAGS_module.o := -DREV=$(REV)
+-- 
+2.25.1
+

@@ -1,0 +1,56 @@
+From 361c86ef213f0c64666279600d78dcbe368daf8b Mon Sep 17 00:00:00 2001
+From: Florian Pose <fp@igh.de>
+Date: Fri, 3 Apr 2020 11:45:15 +0200
+Subject: [PATCH 03/24] Fixed possible file name overflow.
+
+---
+ tool/CommandFoeRead.cpp  | 4 ++--
+ tool/CommandFoeWrite.cpp | 5 +++--
+ 2 files changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/tool/CommandFoeRead.cpp b/tool/CommandFoeRead.cpp
+index 42597720..aef9bb9e 100644
+--- a/tool/CommandFoeRead.cpp
++++ b/tool/CommandFoeRead.cpp
+@@ -1,6 +1,6 @@
+ /*****************************************************************************
+  *
+- *  $Id$
++ *  $Id: CommandFoeRead.cpp,v 4f682084c643 2010/10/25 08:12:26 fp $
+  *
+  *  Copyright (C) 2006-2009  Florian Pose, Ingenieurgemeinschaft IgH
+  *
+@@ -117,7 +117,7 @@ void CommandFoeRead::execute(const StringVector &args)
+     data.buffer_size = 0x8800;
+     data.buffer = new uint8_t[data.buffer_size];
+ 
+-    strncpy(data.file_name, args[0].c_str(), sizeof(data.file_name));
++    strncpy(data.file_name, args[0].c_str(), sizeof(data.file_name) - 1);
+     data.file_name[sizeof(data.file_name)-1] = 0;
+     if (args.size() >= 2) {
+         stringstream strPassword;
+diff --git a/tool/CommandFoeWrite.cpp b/tool/CommandFoeWrite.cpp
+index c98a04eb..031dc419 100644
+--- a/tool/CommandFoeWrite.cpp
++++ b/tool/CommandFoeWrite.cpp
+@@ -1,6 +1,6 @@
+ /*****************************************************************************
+  *
+- *  $Id$
++ *  $Id: CommandFoeWrite.cpp,v 4f682084c643 2010/10/25 08:12:26 fp $
+  *
+  *  Copyright (C) 2006-2009  Florian Pose, Ingenieurgemeinschaft IgH
+  *
+@@ -141,7 +141,8 @@ void CommandFoeWrite::execute(const StringVector &args)
+     // write data via foe to the slave
+     data.offset = 0;
+     data.password = 0;
+-    strncpy(data.file_name, storeFileName.c_str(), sizeof(data.file_name));
++    strncpy(data.file_name, storeFileName.c_str(),
++            sizeof(data.file_name) - 1);
+     data.file_name[sizeof(data.file_name)-1] = 0;
+     if (args.size() >= 2) {
+         stringstream strPassword;
+-- 
+2.25.1
+
