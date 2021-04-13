@@ -1,14 +1,14 @@
-From ac4a67b5d8ec3272e833dbe7ced54872e6f01d68 Mon Sep 17 00:00:00 2001
+From 18503344554421ab30ce444bbbf2735b69a31991 Mon Sep 17 00:00:00 2001
 From: Florian Pose <fp@igh.de>
 Date: Fri, 3 Apr 2020 12:09:39 +0200
 Subject: [PATCH 05/24] Fixed missing include for struct sched_param.
 
 ---
- master/master.c | 15 +++++++--------
- 1 file changed, 7 insertions(+), 8 deletions(-)
+ master/master.c | 7 +++----
+ 1 file changed, 3 insertions(+), 4 deletions(-)
 
 diff --git a/master/master.c b/master/master.c
-index bbd67714..f192c4bf 100644
+index 359e85a3..446cc9f1 100644
 --- a/master/master.c
 +++ b/master/master.c
 @@ -1,8 +1,6 @@
@@ -21,33 +21,16 @@ index bbd67714..f192c4bf 100644
   *
   *  This file is part of the IgH EtherCAT Master.
   *
-@@ -46,11 +44,6 @@
- #include <linux/hrtimer.h>
+@@ -47,7 +45,8 @@
  #include <linux/vmalloc.h>
  
--#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
 -#include <linux/sched/types.h> // struct sched_param
--#include <linux/sched/signal.h> // signal_pending
--#endif
--
- #include "globals.h"
- #include "slave.h"
- #include "slave_config.h"
-@@ -58,8 +51,14 @@
- #include "datagram.h"
- #include "mailbox.h"
- #ifdef EC_EOE
-+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
 +#include <uapi/linux/sched/types.h> // struct sched_param
 +#include <linux/sched/types.h> // sched_setscheduler
-+#include <linux/sched/signal.h> // signal_pending
-+#endif
- #include "ethernet.h"
+ #include <linux/sched/signal.h> // signal_pending
  #endif
-+
- #include "master.h"
  
- /*****************************************************************************/
 -- 
 2.25.1
 
