@@ -1,0 +1,34 @@
+From a81cd06b2854dcbd94c748e6806743ce98415c1c Mon Sep 17 00:00:00 2001
+From: Mark Verrijt <mark.verrijt@vectioneer.com>
+Date: Wed, 14 Apr 2021 10:24:29 +0200
+Subject: [PATCH 12/12] gettimeofday wrapper for kernel 5.x
+
+---
+ master/device.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/master/device.c b/master/device.c
+index 07172c84..d87b1a58 100644
+--- a/master/device.c
++++ b/master/device.c
+@@ -55,6 +55,17 @@
+     } while (0)
+ #endif
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
++static void do_gettimeofday(struct timeval *tv)
++{
++	struct timespec ts;
++
++	ktime_get_ts(&ts);
++	tv->tv_sec = ts.tv_sec;
++	tv->tv_usec = ts.tv_nsec / NSEC_PER_USEC;
++}
++#endif
++
+ /*****************************************************************************/
+ 
+ /** Constructor.
+-- 
+2.25.1
+

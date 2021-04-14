@@ -9,3 +9,4 @@ base/0008-async-SOE-request-add-workaround-for-crash-when-deac.patch
 base/0009-mailbox-gateway-fix-from-updated-Graeme-Foot-patch.patch
 base/0010-Fix-memory-leak-in-igb-driver-for-kernel-4.14-and-4.patch
 base/0011-Added-5.4-kernel-drivers.patch
+base/0012-gettimeofday-wrapper-for-kernel-5.x.patch
