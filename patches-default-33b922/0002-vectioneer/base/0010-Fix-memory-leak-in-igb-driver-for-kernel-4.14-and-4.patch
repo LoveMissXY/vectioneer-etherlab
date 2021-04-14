@@ -1,0 +1,37 @@
+From ce3bda4d065a875e6c1025a3af65bf67419a9e34 Mon Sep 17 00:00:00 2001
+From: Mark Verrijt <mark.verrijt@vectioneer.com>
+Date: Wed, 14 Apr 2021 09:55:35 +0200
+Subject: [PATCH 10/11] Fix memory leak in igb driver for kernel 4.14 and 4.19
+
+---
+ devices/igb/igb_main-4.14-ethercat.c | 1 +
+ devices/igb/igb_main-4.19-ethercat.c | 1 +
+ 2 files changed, 2 insertions(+)
+
+diff --git a/devices/igb/igb_main-4.14-ethercat.c b/devices/igb/igb_main-4.14-ethercat.c
+index cebb88f2..62880a9e 100644
+--- a/devices/igb/igb_main-4.14-ethercat.c
++++ b/devices/igb/igb_main-4.14-ethercat.c
+@@ -7657,6 +7657,7 @@ static int igb_clean_rx_irq(struct igb_q_vector *q_vector, const int budget)
+ 			unsigned int size = le16_to_cpu(rx_desc->wb.upper.length);
+ 			ecdev_receive(adapter->ecdev, va, size);
+ 			adapter->ec_watchdog_jiffies = jiffies;
++			igb_reuse_rx_page(rx_ring, rx_buffer);
+ 
+ 		}
+ 		else if (skb)
+diff --git a/devices/igb/igb_main-4.19-ethercat.c b/devices/igb/igb_main-4.19-ethercat.c
+index d90ece79..c884656a 100644
+--- a/devices/igb/igb_main-4.19-ethercat.c
++++ b/devices/igb/igb_main-4.19-ethercat.c
+@@ -8478,6 +8478,7 @@ static int igb_clean_rx_irq(struct igb_q_vector *q_vector, const int budget)
+ 			unsigned int size = le16_to_cpu(rx_desc->wb.upper.length);
+ 			ecdev_receive(adapter->ecdev, va, size);
+ 			adapter->ec_watchdog_jiffies = jiffies;
++			igb_reuse_rx_page(rx_ring, rx_buffer);
+ 
+ 		}
+ 		else if (skb)
+-- 
+2.25.1
+
