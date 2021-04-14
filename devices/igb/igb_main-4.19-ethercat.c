@@ -8478,6 +8478,7 @@ static int igb_clean_rx_irq(struct igb_q_vector *q_vector, const int budget)
 			unsigned int size = le16_to_cpu(rx_desc->wb.upper.length);
 			ecdev_receive(adapter->ecdev, va, size);
 			adapter->ec_watchdog_jiffies = jiffies;
+			igb_reuse_rx_page(rx_ring, rx_buffer);
 
 		}
 		else if (skb)
