@@ -1,0 +1,58 @@
+From d2df4369773933c4ed57bbacbb2340da5c6971ea Mon Sep 17 00:00:00 2001
+From: Nicola Fontana <ntd@entidi.it>
+Date: Sun, 28 Feb 2021 20:47:46 +0100
+Subject: [PATCH 07/24] Fix sched_setscheduler undefined on kernel 5.9
+
+sched_setscheduler is no more exported:
+    https://lkml.org/lkml/2020/4/22/1071
+---
+ master/master.c | 19 +++++++++++++++----
+ 1 file changed, 15 insertions(+), 4 deletions(-)
+
+diff --git a/master/master.c b/master/master.c
+index f192c4bf..023ad250 100644
+--- a/master/master.c
++++ b/master/master.c
+@@ -1764,6 +1764,20 @@ void ec_master_nanosleep(const unsigned long nsecs)
+ 
+ /*****************************************************************************/
+ 
++/* compatibility for priority changes */
++static inline void set_normal_priority(struct task_struct *p, int nice)
++{
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
++    sched_set_normal(p, nice);
++#else
++    struct sched_param param = { .sched_priority = 0 };
++    sched_setscheduler(p, SCHED_NORMAL, &param);
++    set_user_nice(p, nice);
++#endif
++}
++
++/*****************************************************************************/
++
+ /** Execute slave FSMs.
+  */
+ void ec_master_exec_slave_fsms(
+@@ -1991,8 +2005,6 @@ static int ec_master_operation_thread(void *priv_data)
+  */
+ void ec_master_eoe_start(ec_master_t *master /**< EtherCAT master */)
+ {
+-    struct sched_param param = { .sched_priority = 0 };
+-
+     if (master->eoe_thread) {
+         EC_MASTER_WARN(master, "EoE already running!\n");
+         return;
+@@ -2020,8 +2032,7 @@ void ec_master_eoe_start(ec_master_t *master /**< EtherCAT master */)
+         return;
+     }
+ 
+-    sched_setscheduler(master->eoe_thread, SCHED_NORMAL, &param);
+-    set_user_nice(master->eoe_thread, 0);
++    set_normal_priority(master->eoe_thread, 0);
+ }
+ 
+ /*****************************************************************************/
+-- 
+2.25.1
+

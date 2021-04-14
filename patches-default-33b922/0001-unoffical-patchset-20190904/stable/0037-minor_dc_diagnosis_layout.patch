@@ -1,0 +1,30 @@
+# HG changeset patch
+# User Florian Pose <fp@igh.de>
+# Date 1543320890 -3600
+#      Tue Nov 27 13:14:50 2018 +0100
+Minor: DC diagnosis layout.
+(grafted from eeb9bf997a8d8f1354df499526df438931b3b753)
+
+diff --git a/tool/CommandMaster.cpp b/tool/CommandMaster.cpp
+--- a/tool/CommandMaster.cpp
++++ b/tool/CommandMaster.cpp
+@@ -257,7 +257,7 @@ void CommandMaster::execute(const String
+         cout << setprecision(0) << endl;
+ 
+         cout << "  Distributed clocks:" << endl
+-            << "    Reference clock: ";
++            << "    Reference clock:   ";
+         if (data.ref_clock != 0xffff) {
+             cout << "Slave " << dec << data.ref_clock;
+         } else {
+@@ -265,8 +265,8 @@ void CommandMaster::execute(const String
+         }
+         cout << endl
+             << "    DC reference time: " << data.dc_ref_time << endl
+-            << "    Application time: " << data.app_time << endl
+-            << "                      ";
++            << "    Application time:  " << data.app_time << endl
++            << "                       ";
+ 
+         epoch = data.app_time / 1000000000 + 946684800ULL;
+         time_str_size = strftime(time_str, MAX_TIME_STR_SIZE,

@@ -1,0 +1,1202 @@
+# HG changeset patch
+# User Florian Pose
+# Date 1540292585 -7200
+#      Tue Oct 23 13:03:05 2018 +0200
+Checked usage of last_rx timestamp for stats; fixed indentation.
+(grafted from c1dc35834e99c8dac1285eb5ca75d8817d326f46)
+
+diff --git a/devices/8139too-2.6.13-ethercat.c b/devices/8139too-2.6.13-ethercat.c
+--- a/devices/8139too-2.6.13-ethercat.c
++++ b/devices/8139too-2.6.13-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+diff --git a/devices/8139too-2.6.17-ethercat.c b/devices/8139too-2.6.17-ethercat.c
+--- a/devices/8139too-2.6.17-ethercat.c
++++ b/devices/8139too-2.6.17-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+diff --git a/devices/8139too-2.6.18-ethercat.c b/devices/8139too-2.6.18-ethercat.c
+--- a/devices/8139too-2.6.18-ethercat.c
++++ b/devices/8139too-2.6.18-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+diff --git a/devices/8139too-2.6.19-ethercat.c b/devices/8139too-2.6.19-ethercat.c
+--- a/devices/8139too-2.6.19-ethercat.c
++++ b/devices/8139too-2.6.19-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+diff --git a/devices/8139too-2.6.22-ethercat.c b/devices/8139too-2.6.22-ethercat.c
+--- a/devices/8139too-2.6.22-ethercat.c
++++ b/devices/8139too-2.6.22-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -2112,14 +2114,14 @@ no_early_rx:
+ 			goto out;
+ 		}
+ 
+-      		if (tp->ecdev) {
+- 			ecdev_receive(tp->ecdev,
+- 					&rx_ring[ring_offset + 4], pkt_size);
+- 			dev->last_rx = jiffies;
+- 			tp->stats.rx_bytes += pkt_size;
+- 			tp->stats.rx_packets++;
+- 		}
+- 		else {
++		if (tp->ecdev) {
++			ecdev_receive(tp->ecdev,
++					&rx_ring[ring_offset + 4], pkt_size);
++			dev->last_rx = jiffies;
++			tp->stats.rx_bytes += pkt_size;
++			tp->stats.rx_packets++;
++		}
++		else {
+ 
+ 		  /* Malloc up new buffer, compatible with net-2e. */
+ 		  /* Omit the four octet CRC from the length. */
+@@ -2257,7 +2259,7 @@ static int rtl8139_poll(struct net_devic
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-2.6.23-ethercat.c b/devices/8139too-2.6.23-ethercat.c
+--- a/devices/8139too-2.6.23-ethercat.c
++++ b/devices/8139too-2.6.23-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -644,7 +646,7 @@ struct rtl8139_private {
+ 	struct mii_if_info mii;
+ 	unsigned int regs_len;
+ 	unsigned long fifo_copy_timeout;
+-    
++
+ 	ec_device_t *ecdev;
+ };
+ 
+@@ -1064,7 +1066,7 @@ static int __devinit rtl8139_init_one (s
+ 	tp->mii.reg_num_mask = 0x1f;
+ 
+ 	/* dev is fully set up and ready to use now */
+-    
++
+ 	// offer device to EtherCAT master module
+ 	tp->ecdev = ecdev_offer(dev, ec_poll, THIS_MODULE);
+ 
+@@ -2109,43 +2111,41 @@ no_early_rx:
+ 			goto out;
+ 		}
+ 
+-       		if (tp->ecdev) {
+-  			ecdev_receive(tp->ecdev,
+-  					&rx_ring[ring_offset + 4], pkt_size);
+-  			dev->last_rx = jiffies;
+-  			tp->stats.rx_bytes += pkt_size;
+-  			tp->stats.rx_packets++;
+-  		}
+-  		else {
+-
+-                    /* Malloc up new buffer, compatible with net-2e. */
+-                    /* Omit the four octet CRC from the length. */
+-
+-                    skb = dev_alloc_skb (pkt_size + 2);
+-                    if (likely(skb)) {
+-                        skb_reserve (skb, 2);	/* 16 byte align the IP fields. */
++		if (tp->ecdev) {
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->last_rx = jiffies;
++			tp->stats.rx_bytes += pkt_size;
++			tp->stats.rx_packets++;
++		}
++		else {
++			/* Malloc up new buffer, compatible with net-2e. */
++			/* Omit the four octet CRC from the length. */
++
++			skb = dev_alloc_skb (pkt_size + 2);
++			if (likely(skb)) {
++				skb_reserve (skb, 2);	/* 16 byte align the IP fields. */
+ #if RX_BUF_IDX == 3
+-                        wrap_copy(skb, rx_ring, ring_offset+4, pkt_size);
++				wrap_copy(skb, rx_ring, ring_offset+4, pkt_size);
+ #else
+-                        skb_copy_to_linear_data (skb, &rx_ring[ring_offset + 4], pkt_size);
++				skb_copy_to_linear_data (skb, &rx_ring[ring_offset + 4], pkt_size);
+ #endif
+-                        skb_put (skb, pkt_size);
+-
+-                        skb->protocol = eth_type_trans (skb, dev);
+-
+-                        dev->last_rx = jiffies;
+-                        tp->stats.rx_bytes += pkt_size;
+-                        tp->stats.rx_packets++;
+-
+-                        netif_receive_skb (skb);
+-                    } else {
+-                        if (net_ratelimit())
+-                            printk (KERN_WARNING
+-                                    "%s: Memory squeeze, dropping packet.\n",
+-                                    dev->name);
+-                        tp->stats.rx_dropped++;
+-                    }
+-                }
++				skb_put (skb, pkt_size);
++
++				skb->protocol = eth_type_trans (skb, dev);
++
++				dev->last_rx = jiffies;
++				tp->stats.rx_bytes += pkt_size;
++				tp->stats.rx_packets++;
++
++				netif_receive_skb (skb);
++			} else {
++				if (net_ratelimit())
++					printk (KERN_WARNING
++							"%s: Memory squeeze, dropping packet.\n",
++							dev->name);
++				tp->stats.rx_dropped++;
++			}
++		}
+ 		received++;
+ 
+ 		cur_rx = (cur_rx + rx_size + 4 + 3) & ~3;
+@@ -2254,7 +2254,7 @@ static int rtl8139_poll(struct net_devic
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-2.6.24-ethercat.c b/devices/8139too-2.6.24-ethercat.c
+--- a/devices/8139too-2.6.24-ethercat.c
++++ b/devices/8139too-2.6.24-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -2104,43 +2106,41 @@ no_early_rx:
+ 			goto out;
+ 		}
+ 
+-       		if (tp->ecdev) {
+-  			ecdev_receive(tp->ecdev,
+-  					&rx_ring[ring_offset + 4], pkt_size);
+-  			dev->last_rx = jiffies;
+-  			tp->stats.rx_bytes += pkt_size;
+-  			tp->stats.rx_packets++;
+-  		}
+-  		else {
+-
+-                    /* Malloc up new buffer, compatible with net-2e. */
+-                    /* Omit the four octet CRC from the length. */
+-
+-                    skb = dev_alloc_skb (pkt_size + 2);
+-                    if (likely(skb)) {
+-                        skb_reserve (skb, 2);	/* 16 byte align the IP fields. */
++		if (tp->ecdev) {
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->last_rx = jiffies;
++			tp->stats.rx_bytes += pkt_size;
++			tp->stats.rx_packets++;
++		}
++		else {
++			/* Malloc up new buffer, compatible with net-2e. */
++			/* Omit the four octet CRC from the length. */
++
++			skb = dev_alloc_skb (pkt_size + 2);
++			if (likely(skb)) {
++				skb_reserve (skb, 2);	/* 16 byte align the IP fields. */
+ #if RX_BUF_IDX == 3
+-                        wrap_copy(skb, rx_ring, ring_offset+4, pkt_size);
++				wrap_copy(skb, rx_ring, ring_offset+4, pkt_size);
+ #else
+-                        skb_copy_to_linear_data (skb, &rx_ring[ring_offset + 4], pkt_size);
++				skb_copy_to_linear_data (skb, &rx_ring[ring_offset + 4], pkt_size);
+ #endif
+-                        skb_put (skb, pkt_size);
+-
+-                        skb->protocol = eth_type_trans (skb, dev);
+-
+-                        dev->last_rx = jiffies;
+-                        tp->stats.rx_bytes += pkt_size;
+-                        tp->stats.rx_packets++;
+-
+-                        netif_receive_skb (skb);
+-                    } else {
+-                        if (net_ratelimit())
+-                            printk (KERN_WARNING
+-                                    "%s: Memory squeeze, dropping packet.\n",
+-                                    dev->name);
+-                        tp->stats.rx_dropped++;
+-                    }
+-                }
++				skb_put (skb, pkt_size);
++
++				skb->protocol = eth_type_trans (skb, dev);
++
++				dev->last_rx = jiffies;
++				tp->stats.rx_bytes += pkt_size;
++				tp->stats.rx_packets++;
++
++				netif_receive_skb (skb);
++			} else {
++				if (net_ratelimit())
++					printk (KERN_WARNING
++							"%s: Memory squeeze, dropping packet.\n",
++							dev->name);
++				tp->stats.rx_dropped++;
++			}
++		}
+ 		received++;
+ 
+ 		cur_rx = (cur_rx + rx_size + 4 + 3) & ~3;
+@@ -2242,7 +2242,7 @@ static int rtl8139_poll(struct napi_stru
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-2.6.25-ethercat.c b/devices/8139too-2.6.25-ethercat.c
+--- a/devices/8139too-2.6.25-ethercat.c
++++ b/devices/8139too-2.6.25-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -653,7 +655,7 @@ struct rtl8139_private {
+ 	struct mii_if_info	mii;
+ 	unsigned int		regs_len;
+ 	unsigned long		fifo_copy_timeout;
+-    
++
+ 	ec_device_t *ecdev;
+ };
+ 
+@@ -1060,7 +1062,7 @@ static int __devinit rtl8139_init_one (s
+ 	tp->mii.reg_num_mask = 0x1f;
+ 
+ 	/* dev is fully set up and ready to use now */
+-    
++
+ 	// offer device to EtherCAT master module
+ 	tp->ecdev = ecdev_offer(dev, ec_poll, THIS_MODULE);
+ 
+@@ -2104,43 +2106,41 @@ no_early_rx:
+ 			goto out;
+ 		}
+ 
+-       		if (tp->ecdev) {
+-  			ecdev_receive(tp->ecdev,
+-  					&rx_ring[ring_offset + 4], pkt_size);
+-  			dev->last_rx = jiffies;
+-  			tp->stats.rx_bytes += pkt_size;
+-  			tp->stats.rx_packets++;
+-  		}
+-  		else {
+-
+-                    /* Malloc up new buffer, compatible with net-2e. */
+-                    /* Omit the four octet CRC from the length. */
+-
+-                    skb = dev_alloc_skb (pkt_size + 2);
+-                    if (likely(skb)) {
+-                        skb_reserve (skb, 2);	/* 16 byte align the IP fields. */
++		if (tp->ecdev) {
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->last_rx = jiffies;
++			tp->stats.rx_bytes += pkt_size;
++			tp->stats.rx_packets++;
++		}
++		else {
++			/* Malloc up new buffer, compatible with net-2e. */
++			/* Omit the four octet CRC from the length. */
++
++			skb = dev_alloc_skb (pkt_size + 2);
++			if (likely(skb)) {
++				skb_reserve (skb, 2);	/* 16 byte align the IP fields. */
+ #if RX_BUF_IDX == 3
+-                        wrap_copy(skb, rx_ring, ring_offset+4, pkt_size);
++				wrap_copy(skb, rx_ring, ring_offset+4, pkt_size);
+ #else
+-                        skb_copy_to_linear_data (skb, &rx_ring[ring_offset + 4], pkt_size);
++				skb_copy_to_linear_data (skb, &rx_ring[ring_offset + 4], pkt_size);
+ #endif
+-                        skb_put (skb, pkt_size);
+-
+-                        skb->protocol = eth_type_trans (skb, dev);
+-
+-                        dev->last_rx = jiffies;
+-                        tp->stats.rx_bytes += pkt_size;
+-                        tp->stats.rx_packets++;
+-
+-                        netif_receive_skb (skb);
+-                    } else {
+-                        if (net_ratelimit())
+-                            printk (KERN_WARNING
+-                                    "%s: Memory squeeze, dropping packet.\n",
+-                                    dev->name);
+-                        tp->stats.rx_dropped++;
+-                    }
+-                }
++				skb_put (skb, pkt_size);
++
++				skb->protocol = eth_type_trans (skb, dev);
++
++				dev->last_rx = jiffies;
++				tp->stats.rx_bytes += pkt_size;
++				tp->stats.rx_packets++;
++
++				netif_receive_skb (skb);
++			} else {
++				if (net_ratelimit())
++					printk (KERN_WARNING
++							"%s: Memory squeeze, dropping packet.\n",
++							dev->name);
++				tp->stats.rx_dropped++;
++			}
++		}
+ 		received++;
+ 
+ 		cur_rx = (cur_rx + rx_size + 4 + 3) & ~3;
+@@ -2242,7 +2242,7 @@ static int rtl8139_poll(struct napi_stru
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-2.6.26-ethercat.c b/devices/8139too-2.6.26-ethercat.c
+--- a/devices/8139too-2.6.26-ethercat.c
++++ b/devices/8139too-2.6.26-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -2104,43 +2106,42 @@ no_early_rx:
+ 			goto out;
+ 		}
+ 
+-       		if (tp->ecdev) {
+-  			ecdev_receive(tp->ecdev,
+-  					&rx_ring[ring_offset + 4], pkt_size);
+-  			dev->last_rx = jiffies;
+-  			tp->stats.rx_bytes += pkt_size;
+-  			tp->stats.rx_packets++;
+-  		}
+-  		else {
+-
+-                    /* Malloc up new buffer, compatible with net-2e. */
+-                    /* Omit the four octet CRC from the length. */
+-
+-                    skb = dev_alloc_skb (pkt_size + 2);
+-                    if (likely(skb)) {
+-                        skb_reserve (skb, 2);	/* 16 byte align the IP fields. */
++		if (tp->ecdev) {
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->last_rx = jiffies;
++			tp->stats.rx_bytes += pkt_size;
++			tp->stats.rx_packets++;
++		}
++		else {
++
++			/* Malloc up new buffer, compatible with net-2e. */
++			/* Omit the four octet CRC from the length. */
++
++			skb = dev_alloc_skb (pkt_size + 2);
++			if (likely(skb)) {
++				skb_reserve (skb, 2);	/* 16 byte align the IP fields. */
+ #if RX_BUF_IDX == 3
+-                        wrap_copy(skb, rx_ring, ring_offset+4, pkt_size);
++				wrap_copy(skb, rx_ring, ring_offset+4, pkt_size);
+ #else
+-                        skb_copy_to_linear_data (skb, &rx_ring[ring_offset + 4], pkt_size);
++				skb_copy_to_linear_data (skb, &rx_ring[ring_offset + 4], pkt_size);
+ #endif
+-                        skb_put (skb, pkt_size);
+-
+-                        skb->protocol = eth_type_trans (skb, dev);
+-
+-                        dev->last_rx = jiffies;
+-                        tp->stats.rx_bytes += pkt_size;
+-                        tp->stats.rx_packets++;
+-
+-                        netif_receive_skb (skb);
+-                    } else {
+-                        if (net_ratelimit())
+-                            printk (KERN_WARNING
+-                                    "%s: Memory squeeze, dropping packet.\n",
+-                                    dev->name);
+-                        tp->stats.rx_dropped++;
+-                    }
+-                }
++				skb_put (skb, pkt_size);
++
++				skb->protocol = eth_type_trans (skb, dev);
++
++				dev->last_rx = jiffies;
++				tp->stats.rx_bytes += pkt_size;
++				tp->stats.rx_packets++;
++
++				netif_receive_skb (skb);
++			} else {
++				if (net_ratelimit())
++					printk (KERN_WARNING
++							"%s: Memory squeeze, dropping packet.\n",
++							dev->name);
++				tp->stats.rx_dropped++;
++			}
++		}
+ 		received++;
+ 
+ 		cur_rx = (cur_rx + rx_size + 4 + 3) & ~3;
+@@ -2242,7 +2243,7 @@ static int rtl8139_poll(struct napi_stru
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-2.6.27-ethercat.c b/devices/8139too-2.6.27-ethercat.c
+--- a/devices/8139too-2.6.27-ethercat.c
++++ b/devices/8139too-2.6.27-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -2109,11 +2111,10 @@ no_early_rx:
+ 		}
+ 
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->last_rx = jiffies;
++			dev->stats.rx_bytes += pkt_size;
++			dev->stats.rx_packets++;
+ 		} else {
+ 			/* Malloc up new buffer, compatible with net-2e. */
+ 			/* Omit the four octet CRC from the length. */
+@@ -2244,7 +2245,7 @@ static int rtl8139_poll(struct napi_stru
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-2.6.28-ethercat.c b/devices/8139too-2.6.28-ethercat.c
+--- a/devices/8139too-2.6.28-ethercat.c
++++ b/devices/8139too-2.6.28-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -2109,11 +2111,10 @@ no_early_rx:
+ 		}
+ 
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->last_rx = jiffies;
++			dev->stats.rx_bytes += pkt_size;
++			dev->stats.rx_packets++;
+ 		} else {
+ 			/* Malloc up new buffer, compatible with net-2e. */
+ 			/* Omit the four octet CRC from the length. */
+@@ -2244,7 +2245,7 @@ static int rtl8139_poll(struct napi_stru
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-2.6.29-ethercat.c b/devices/8139too-2.6.29-ethercat.c
+--- a/devices/8139too-2.6.29-ethercat.c
++++ b/devices/8139too-2.6.29-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -1835,7 +1837,7 @@ static int rtl8139_start_xmit (struct sk
+ 		if (netif_msg_tx_queued(tp))
+ 			printk (KERN_DEBUG "%s: Queued Tx packet size %u to slot %d.\n",
+ 				dev->name, len, entry);
+-   }
++	}
+ 
+ 	return 0;
+ }
+@@ -2109,11 +2111,9 @@ no_early_rx:
+ 		}
+ 
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->stats.rx_bytes += pkt_size;
++			dev->stats.rx_packets++;
+ 		} else {
+ 			/* Malloc up new buffer, compatible with net-2e. */
+ 			/* Omit the four octet CRC from the length. */
+@@ -2243,7 +2243,7 @@ static int rtl8139_poll(struct napi_stru
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-2.6.31-ethercat.c b/devices/8139too-2.6.31-ethercat.c
+--- a/devices/8139too-2.6.31-ethercat.c
++++ b/devices/8139too-2.6.31-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -2102,11 +2104,9 @@ no_early_rx:
+ 		}
+ 
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->stats.rx_bytes += pkt_size;
++			dev->stats.rx_packets++;
+ 		} else {
+ 			/* Malloc up new buffer, compatible with net-2e. */
+ 			/* Omit the four octet CRC from the length. */
+@@ -2233,7 +2233,7 @@ static int rtl8139_poll(struct napi_stru
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-2.6.32-ethercat.c b/devices/8139too-2.6.32-ethercat.c
+--- a/devices/8139too-2.6.32-ethercat.c
++++ b/devices/8139too-2.6.32-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -2101,11 +2103,9 @@ no_early_rx:
+ 		}
+ 
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->stats.rx_bytes += pkt_size;
++			dev->stats.rx_packets++;
+ 		} else {
+ 			/* Malloc up new buffer, compatible with net-2e. */
+ 			/* Omit the four octet CRC from the length. */
+@@ -2232,7 +2232,7 @@ static int rtl8139_poll(struct napi_stru
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-2.6.33-ethercat.c b/devices/8139too-2.6.33-ethercat.c
+--- a/devices/8139too-2.6.33-ethercat.c
++++ b/devices/8139too-2.6.33-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -647,7 +649,7 @@ struct rtl8139_private {
+ 	struct mii_if_info	mii;
+ 	unsigned int		regs_len;
+ 	unsigned long		fifo_copy_timeout;
+-    
++
+ 	ec_device_t *ecdev;
+ };
+ 
+@@ -2034,9 +2036,9 @@ static int rtl8139_rx(struct net_device 
+ 		 RTL_R16 (RxBufAddr),
+ 		 RTL_R16 (RxBufPtr), RTL_R8 (ChipCmd));
+ 
+-	while ((tp->ecdev || netif_running(dev)) 
+-           && received < budget 
+-           && (RTL_R8 (ChipCmd) & RxBufEmpty) == 0) {
++	while ((tp->ecdev || netif_running(dev))
++			&& received < budget
++			&& (RTL_R8 (ChipCmd) & RxBufEmpty) == 0) {
+ 		u32 ring_offset = cur_rx % RX_BUF_LEN;
+ 		u32 rx_status;
+ 		unsigned int pkt_size;
+@@ -2103,17 +2105,15 @@ no_early_rx:
+ 		}
+ 
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->stats.rx_bytes += pkt_size;
++			dev->stats.rx_packets++;
+ 		} else {
+ 			/* Malloc up new buffer, compatible with net-2e. */
+ 			/* Omit the four octet CRC from the length. */
+-            
+-            skb = netdev_alloc_skb_ip_align(dev, pkt_size);
+-            if (likely(skb)) {
++
++			skb = netdev_alloc_skb_ip_align(dev, pkt_size);
++			if (likely(skb)) {
+ 
+ #if RX_BUF_IDX == 3
+ 				wrap_copy(skb, rx_ring, ring_offset+4, pkt_size);
+@@ -2121,17 +2121,17 @@ no_early_rx:
+ 				skb_copy_to_linear_data (skb, &rx_ring[ring_offset + 4], pkt_size);
+ #endif
+ 				skb_put (skb, pkt_size);
+-                
++
+ 				skb->protocol = eth_type_trans (skb, dev);
+-                
++
+ 				dev->stats.rx_bytes += pkt_size;
+ 				dev->stats.rx_packets++;
+-                
++
+ 				netif_receive_skb (skb);
+ 			} else {
+ 				if (net_ratelimit())
+ 					pr_warning("%s: Memory squeeze, dropping packet.\n",
+-                               dev->name);
++							dev->name);
+ 				dev->stats.rx_dropped++;
+ 			}
+ 		}
+@@ -2234,7 +2234,7 @@ static int rtl8139_poll(struct napi_stru
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-2.6.34-ethercat.c b/devices/8139too-2.6.34-ethercat.c
+--- a/devices/8139too-2.6.34-ethercat.c
++++ b/devices/8139too-2.6.34-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -2103,11 +2105,9 @@ no_early_rx:
+ 		}
+ 
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->stats.rx_bytes += pkt_size;
++			dev->stats.rx_packets++;
+ 		} else {
+ 			/* Malloc up new buffer, compatible with net-2e. */
+ 			/* Omit the four octet CRC from the length. */
+@@ -2234,7 +2234,7 @@ static int rtl8139_poll(struct napi_stru
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-2.6.35-ethercat.c b/devices/8139too-2.6.35-ethercat.c
+--- a/devices/8139too-2.6.35-ethercat.c
++++ b/devices/8139too-2.6.35-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -2100,11 +2102,9 @@ no_early_rx:
+ 		}
+ 
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->stats.rx_bytes += pkt_size;
++			dev->stats.rx_packets++;
+ 		} else {
+ 			/* Malloc up new buffer, compatible with net-2e. */
+ 			/* Omit the four octet CRC from the length. */
+@@ -2231,7 +2231,7 @@ static int rtl8139_poll(struct napi_stru
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-2.6.36-ethercat.c b/devices/8139too-2.6.36-ethercat.c
+--- a/devices/8139too-2.6.36-ethercat.c
++++ b/devices/8139too-2.6.36-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -2104,11 +2106,9 @@ no_early_rx:
+ 		}
+ 
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->stats.rx_bytes += pkt_size;
++			dev->stats.rx_packets++;
+ 		} else {
+ 			/* Malloc up new buffer, compatible with net-2e. */
+ 			/* Omit the four octet CRC from the length. */
+@@ -2235,7 +2235,7 @@ static int rtl8139_poll(struct napi_stru
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-2.6.37-ethercat.c b/devices/8139too-2.6.37-ethercat.c
+--- a/devices/8139too-2.6.37-ethercat.c
++++ b/devices/8139too-2.6.37-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -2106,11 +2108,9 @@ no_early_rx:
+ 		}
+ 
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->stats.rx_bytes += pkt_size;
++			dev->stats.rx_packets++;
+ 		} else {
+ 			/* Malloc up new buffer, compatible with net-2e. */
+ 			/* Omit the four octet CRC from the length. */
+@@ -2237,7 +2237,7 @@ static int rtl8139_poll(struct napi_stru
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-3.0-ethercat.c b/devices/8139too-3.0-ethercat.c
+--- a/devices/8139too-3.0-ethercat.c
++++ b/devices/8139too-3.0-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -2107,11 +2109,9 @@ no_early_rx:
+ 		}
+ 
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->stats.rx_bytes += pkt_size;
++			dev->stats.rx_packets++;
+ 		} else {
+ 			/* Malloc up new buffer, compatible with net-2e. */
+ 			/* Omit the four octet CRC from the length. */
+@@ -2238,7 +2238,7 @@ static int rtl8139_poll(struct napi_stru
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-3.10-ethercat.c b/devices/8139too-3.10-ethercat.c
+--- a/devices/8139too-3.10-ethercat.c
++++ b/devices/8139too-3.10-ethercat.c
+@@ -2146,17 +2146,13 @@ no_early_rx:
+ 		}
+ 
+ keep_pkt:
+-		/* Malloc up new buffer, compatible with net-2e. */
+-		/* Omit the four octet CRC from the length. */
+-
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
+ 		}
+ 		else {
++			/* Malloc up new buffer, compatible with net-2e. */
++			/* Omit the four octet CRC from the length. */
++
+ 			skb = netdev_alloc_skb_ip_align(dev, pkt_size);
+ 			if (likely(skb)) {
+ #if RX_BUF_IDX == 3
+diff --git a/devices/8139too-3.12-ethercat.c b/devices/8139too-3.12-ethercat.c
+--- a/devices/8139too-3.12-ethercat.c
++++ b/devices/8139too-3.12-ethercat.c
+@@ -2146,17 +2146,13 @@ no_early_rx:
+ 		}
+ 
+ keep_pkt:
+-		/* Malloc up new buffer, compatible with net-2e. */
+-		/* Omit the four octet CRC from the length. */
+-
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
+ 		}
+ 		else {
++			/* Malloc up new buffer, compatible with net-2e. */
++			/* Omit the four octet CRC from the length. */
++
+ 			skb = netdev_alloc_skb_ip_align(dev, pkt_size);
+ 			if (likely(skb)) {
+ #if RX_BUF_IDX == 3
+diff --git a/devices/8139too-3.14-ethercat.c b/devices/8139too-3.14-ethercat.c
+--- a/devices/8139too-3.14-ethercat.c
++++ b/devices/8139too-3.14-ethercat.c
+@@ -2148,17 +2148,13 @@ no_early_rx:
+ 		}
+ 
+ keep_pkt:
+-		/* Malloc up new buffer, compatible with net-2e. */
+-		/* Omit the four octet CRC from the length. */
+-
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
+ 		}
+ 		else {
++			/* Malloc up new buffer, compatible with net-2e. */
++			/* Omit the four octet CRC from the length. */
++
+ 			skb = netdev_alloc_skb_ip_align(dev, pkt_size);
+ 			if (likely(skb)) {
+ #if RX_BUF_IDX == 3
+diff --git a/devices/8139too-3.16-ethercat.c b/devices/8139too-3.16-ethercat.c
+--- a/devices/8139too-3.16-ethercat.c
++++ b/devices/8139too-3.16-ethercat.c
+@@ -2148,17 +2148,13 @@ no_early_rx:
+ 		}
+ 
+ keep_pkt:
+-		/* Malloc up new buffer, compatible with net-2e. */
+-		/* Omit the four octet CRC from the length. */
+-
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
+ 		}
+ 		else {
++            /* Malloc up new buffer, compatible with net-2e. */
++            /* Omit the four octet CRC from the length. */
++
+ 			skb = netdev_alloc_skb_ip_align(dev, pkt_size);
+ 			if (likely(skb)) {
+ #if RX_BUF_IDX == 3
+diff --git a/devices/8139too-3.2-ethercat.c b/devices/8139too-3.2-ethercat.c
+--- a/devices/8139too-3.2-ethercat.c
++++ b/devices/8139too-3.2-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -2108,11 +2110,9 @@ no_early_rx:
+ 		}
+ 
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
++			dev->stats.rx_bytes += pkt_size;
++			dev->stats.rx_packets++;
+ 		} else {
+ 			/* Malloc up new buffer, compatible with net-2e. */
+ 			/* Omit the four octet CRC from the length. */
+@@ -2239,7 +2239,7 @@ static int rtl8139_poll(struct napi_stru
+ 
+ void ec_poll(struct net_device *dev)
+ {
+-    rtl8139_interrupt(0, dev);
++	rtl8139_interrupt(0, dev);
+ }
+ 
+ /* The interrupt handler does all of the Rx thread work and cleans up
+diff --git a/devices/8139too-3.4-ethercat.c b/devices/8139too-3.4-ethercat.c
+--- a/devices/8139too-3.4-ethercat.c
++++ b/devices/8139too-3.4-ethercat.c
+@@ -25,6 +25,8 @@
+  *  EtherCAT technology and brand is only permitted in compliance with the
+  *  industrial property and similar rights of Beckhoff Automation GmbH.
+  *
++ *  vim: noexpandtab
++ *
+  *****************************************************************************/
+ 
+ /**
+@@ -2172,11 +2174,7 @@ no_early_rx:
+ 
+ keep_pkt:
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
+ 		} else {
+ 			/* Malloc up new buffer, compatible with net-2e. */
+ 			/* Omit the four octet CRC from the length. */
+diff --git a/devices/8139too-3.6-ethercat.c b/devices/8139too-3.6-ethercat.c
+--- a/devices/8139too-3.6-ethercat.c
++++ b/devices/8139too-3.6-ethercat.c
+@@ -2148,11 +2148,7 @@ no_early_rx:
+ 
+ keep_pkt:
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
+ 		} else {
+ 			/* Malloc up new buffer, compatible with net-2e. */
+ 			/* Omit the four octet CRC from the length. */
+diff --git a/devices/8139too-3.8-ethercat.c b/devices/8139too-3.8-ethercat.c
+--- a/devices/8139too-3.8-ethercat.c
++++ b/devices/8139too-3.8-ethercat.c
+@@ -2148,11 +2148,7 @@ no_early_rx:
+ 
+ keep_pkt:
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
+ 		} else {
+ 			/* Malloc up new buffer, compatible with net-2e. */
+ 			/* Omit the four octet CRC from the length. */
+diff --git a/devices/8139too-4.4-ethercat.c b/devices/8139too-4.4-ethercat.c
+--- a/devices/8139too-4.4-ethercat.c
++++ b/devices/8139too-4.4-ethercat.c
+@@ -2162,17 +2162,13 @@ no_early_rx:
+ 		}
+ 
+ keep_pkt:
+-		/* Malloc up new buffer, compatible with net-2e. */
+-		/* Omit the four octet CRC from the length. */
+-
+ 		if (tp->ecdev) {
+-			ecdev_receive(tp->ecdev,
+-					&rx_ring[ring_offset + 4], pkt_size);
+-					dev->last_rx = jiffies;
+-					dev->stats.rx_bytes += pkt_size;
+-					dev->stats.rx_packets++;
++			ecdev_receive(tp->ecdev, &rx_ring[ring_offset + 4], pkt_size);
+ 		}
+ 		else {
++			/* Malloc up new buffer, compatible with net-2e. */
++			/* Omit the four octet CRC from the length. */
++
+ 			skb = napi_alloc_skb(&tp->napi, pkt_size);
+ 			if (likely(skb)) {
+ #if RX_BUF_IDX == 3

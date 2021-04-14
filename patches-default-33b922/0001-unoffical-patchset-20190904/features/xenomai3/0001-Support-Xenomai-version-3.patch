@@ -1,0 +1,515 @@
+From: Joonyoung Shim <jy0922.shim@samsung.com>
+Date: Fri, 17 Nov 2017 12:21:10 +0900
+
+[PATCH] Support Xenomai version 3
+From 9567f460411d9a832c24b3ef65252f6f4f902fef Mon Sep 17 00:00:00 2001
+Xenomai version 3 has different RTDM interface with version 2 and has
+Alchemy interface instead of native API. This supports RTDM of Xenomai
+version 3 and to use Alchemy interface.
+
+Signed-off-by: Joonyoung Shim <jy0922.shim@samsung.com>
+---
+This is based on the the unofficial patchset to version 20180622 of
+Gavin and tested on linux-4.9.24 on x64 and linux-4.4.71 on x86 with
+xenomai 3.0.5 over using r8169, igb and e1000e NICs.
+
+ configure.ac             |  27 +++-
+ lib/Makefile.am          |  10 +-
+ lib/common.c             |   4 +-
+ lib/master.c             |   4 +-
+ master/Kbuild.in         |   5 +
+ master/Makefile.am       |   1 +
+ master/rtdm_xenomai_v3.c | 350 +++++++++++++++++++++++++++++++++++++++++++++++
+ 7 files changed, 393 insertions(+), 8 deletions(-)
+ create mode 100644 master/rtdm_xenomai_v3.c
+
+diff --git a/configure.ac b/configure.ac
+--- a/configure.ac
++++ b/configure.ac
+@@ -743,18 +743,37 @@ else
+     fi
+     AC_MSG_RESULT([$xenomaidir])
+ 
+-    xeno_native_cflags=`$xenomaidir/bin/xeno-config --skin native --cflags`
+-    xeno_native_ldflags=`$xenomaidir/bin/xeno-config --skin native --ldflags`
++    xenomai_ver=`grep -R "VERSION_STRING" ${xenomaidir}/include/xeno_config.h | awk '{print $3}'`
++    xenomai_ver=${xenomai_ver##\"}
++    xenomai_ver=${xenomai_ver%%\"}
++    echo "xenomai version: " $xenomai_ver
++
++    if test ${xenomai_ver%%.*} -gt 2; then
++        xeno_alchemy_cflags=`$xenomaidir/bin/xeno-config --skin alchemy --cflags`
++        xeno_alchemy_ldflags=`$xenomaidir/bin/xeno-config --skin alchemy --auto-init-solib --ldflags`
++        xeno_posix_ldflags=`$xenomaidir/bin/xeno-config --skin posix --auto-init-solib --ldflags`
++        xeno_rtdm_ldflags=`$xenomaidir/bin/xeno-config --skin rtdm --auto-init-solib --ldflags`
++        xeno_v3=1
++        xeno=0
++    else
++        xeno_native_cflags=`$xenomaidir/bin/xeno-config --skin native --cflags`
++        xeno_native_ldflags=`$xenomaidir/bin/xeno-config --skin native --ldflags`
++        xeno_posix_ldflags=`$xenomaidir/bin/xeno-config --skin posix --ldflags`
++        xeno_rtdm_ldflags=`$xenomaidir/bin/xeno-config --skin rtdm --ldflags`
++    fi
++
+     xeno_posix_cflags=`$xenomaidir/bin/xeno-config --skin posix --cflags`
+-    xeno_posix_ldflags=`$xenomaidir/bin/xeno-config --skin posix --ldflags`
+     xeno_rtdm_cflags=`$xenomaidir/bin/xeno-config --skin rtdm --cflags`
+-    xeno_rtdm_ldflags=`$xenomaidir/bin/xeno-config --skin rtdm --ldflags`
+ fi
+ 
+ AC_SUBST(XENOMAI_DIR,[$xenomaidir])
+ AM_CONDITIONAL(ENABLE_XENOMAI, test "x$xeno" = "x1")
+ AC_SUBST(ENABLE_XENOMAI,[$xeno])
++AM_CONDITIONAL(ENABLE_XENOMAI_V3, test "x$xeno_v3" = "x1")
++AC_SUBST(ENABLE_XENOMAI_V3,[$xeno_v3])
+ 
++AC_SUBST(XENOMAI_ALCHEMY_CFLAGS,[$xeno_alchemy_cflags])
++AC_SUBST(XENOMAI_ALCHEMY_LDFLAGS,[$xeno_alchemy_ldflags])
+ AC_SUBST(XENOMAI_NATIVE_CFLAGS,[$xeno_native_cflags])
+ AC_SUBST(XENOMAI_NATIVE_LDFLAGS,[$xeno_native_ldflags])
+ AC_SUBST(XENOMAI_POSIX_CFLAGS,[$xeno_posix_cflags])
+diff --git a/lib/Makefile.am b/lib/Makefile.am
+--- a/lib/Makefile.am
++++ b/lib/Makefile.am
+@@ -80,7 +80,7 @@ if ENABLE_RTDM
+ lib_LTLIBRARIES += libethercat_rtdm.la
+ 
+ libethercat_rtdm_la_SOURCES = $(libethercat_la_SOURCES)
+-libethercat_rtdm_la_CFLAGS = $(libethercat_la_CFLAGS) -DUSE_RTDM
++libethercat_rtdm_la_CFLAGS = $(libethercat_la_CFLAGS)
+ libethercat_rtdm_la_LDFLAGS = $(libethercat_la_LDFLAGS)
+ 
+ if ENABLE_XENOMAI
+@@ -88,6 +88,14 @@ libethercat_rtdm_la_CFLAGS += $(XENOMAI_
+ libethercat_rtdm_la_LDFLAGS += $(XENOMAI_RTDM_LDFLAGS)
+ endif
+ 
++if ENABLE_XENOMAI_V3
++libethercat_rtdm_la_CFLAGS += $(XENOMAI_RTDM_CFLAGS)
++libethercat_rtdm_la_LDFLAGS += $(XENOMAI_RTDM_LDFLAGS)
++libethercat_rtdm_la_CFLAGS += -DUSE_RTDM_XENOMAI_V3
++else
++libethercat_rtdm_la_CFLAGS += -DUSE_RTDM
++endif
++
+ if ENABLE_RTAI
+ libethercat_rtdm_la_CFLAGS += $(RTAI_LXRT_CFLAGS)
+ libethercat_rtdm_la_LDFLAGS += $(RTAI_LXRT_LDFLAGS)
+diff --git a/lib/common.c b/lib/common.c
+--- a/lib/common.c
++++ b/lib/common.c
+@@ -87,8 +87,10 @@ ec_master_t *ecrt_open_master(unsigned i
+     master->first_config = NULL;
+ 
+     snprintf(path, MAX_PATH_LEN - 1,
+-#ifdef USE_RTDM
++#if defined(USE_RTDM)
+             "EtherCAT%u",
++#elif defined(USE_RTDM_XENOMAI_V3)
++            "/dev/rtdm/EtherCAT%u",
+ #else
+             "/dev/EtherCAT%u",
+ #endif
+diff --git a/lib/master.c b/lib/master.c
+--- a/lib/master.c
++++ b/lib/master.c
+@@ -554,7 +554,7 @@ int ecrt_master_setup_domain_memory(ec_m
+     if (io.process_data_size) {
+         master->process_data_size = io.process_data_size;
+ 
+-#ifdef USE_RTDM
++#if defined(USE_RTDM) || defined(USE_RTDM_XENOMAI_V3)
+         /* memory-mapping was already done in kernel. The user-space addess is
+          * provided in the ioctl data.
+          */
+@@ -596,7 +596,7 @@ int ecrt_master_activate(ec_master_t *ma
+     if (io.process_data_size) {
+         master->process_data_size = io.process_data_size;
+ 
+-#ifdef USE_RTDM
++#if defined(USE_RTDM) || defined(USE_RTDM_XENOMAI_V3)
+         /* memory-mapping was already done in kernel. The user-space addess is
+          * provided in the ioctl data.
+          */
+diff --git a/master/Kbuild.in b/master/Kbuild.in
+--- a/master/Kbuild.in
++++ b/master/Kbuild.in
+@@ -85,7 +85,12 @@ endif
+ 
+ ifeq (@ENABLE_RTDM@,1)
+ 
++ifeq (@ENABLE_XENOMAI_V3@, 1)
++ec_master-objs += rtdm_xenomai_v3.o
++CFLAGS_rtdm.o := -I@XENOMAI_DIR@/include
++else
+ ec_master-objs += rtdm.o
++endif
+ 
+ ifeq (@ENABLE_XENOMAI@, 1)
+ CFLAGS_rtdm.o := -I@XENOMAI_DIR@/include
+diff --git a/master/Makefile.am b/master/Makefile.am
+--- a/master/Makefile.am
++++ b/master/Makefile.am
+@@ -65,6 +65,7 @@ noinst_HEADERS = \
+ 	reg_request.c reg_request.h \
+ 	rtdm-ioctl.c \
+ 	rtdm.c rtdm.h \
++	rtdm_xenomai_v3.c \
+ 	sdo.c sdo.h \
+ 	sdo_entry.c sdo_entry.h \
+ 	sdo_request.c sdo_request.h \
+diff --git a/master/rtdm_xenomai_v3.c b/master/rtdm_xenomai_v3.c
+new file mode 100644
+--- /dev/null
++++ b/master/rtdm_xenomai_v3.c
+@@ -0,0 +1,350 @@
++/*****************************************************************************
++ *
++ *  $Id$
++ *
++ *  Copyright (C) 2009-2010  Moehwald GmbH B. Benner
++ *                     2011  IgH Andreas Stewering-Bone
++ *                     2012  Florian Pose <fp@igh-essen.com>
++ *
++ *  This file is part of the IgH EtherCAT master.
++ *
++ *  The IgH EtherCAT master is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License as published
++ *  by the Free Software Foundation; version 2 of the License.
++ *
++ *  The IgH EtherCAT master is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
++ *  Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License along
++ *  with the IgH EtherCAT master. If not, see <http://www.gnu.org/licenses/>.
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ ****************************************************************************/
++
++/** \file
++ * RTDM interface.
++ */
++
++#include <linux/module.h>
++#include <linux/vmalloc.h>
++#include <rtdm/driver.h>
++
++#include "master.h"
++#include "ioctl.h"
++#include "rtdm.h"
++
++/** Set to 1 to enable device operations debugging.
++ */
++#define DEBUG_RTDM 0
++
++struct ec_rtdm_context {
++	struct rtdm_fd *fd;
++	ec_ioctl_context_t ioctl_ctx;	/**< Context structure. */
++};
++
++static int ec_rtdm_open(struct rtdm_fd *fd, int oflags)
++{
++	struct ec_rtdm_context *ctx = rtdm_fd_to_private(fd);
++#if DEBUG_RTDM
++	struct rtdm_device *dev = rtdm_fd_device(fd);
++	ec_rtdm_dev_t *rtdm_dev = dev->device_data;
++#endif
++
++	ctx->fd = fd;
++
++	ctx->ioctl_ctx.writable = oflags & O_WRONLY || oflags & O_RDWR;
++	ctx->ioctl_ctx.requested = 0;
++	ctx->ioctl_ctx.process_data = NULL;
++	ctx->ioctl_ctx.process_data_size = 0;
++
++#if DEBUG_RTDM
++	EC_MASTER_INFO(rtdm_dev->master, "RTDM device %s opened.\n",
++			dev->name);
++#endif
++
++	return 0;
++}
++
++static void ec_rtdm_close(struct rtdm_fd *fd)
++{
++	struct ec_rtdm_context *ctx = rtdm_fd_to_private(fd);
++	struct rtdm_device *dev = rtdm_fd_device(fd);
++	ec_rtdm_dev_t *rtdm_dev = dev->device_data;
++
++	if (ctx->ioctl_ctx.requested)
++		ecrt_release_master(rtdm_dev->master);
++
++	if (ctx->ioctl_ctx.process_data)
++		vfree(ctx->ioctl_ctx.process_data);
++
++#if DEBUG_RTDM
++	EC_MASTER_INFO(rtdm_dev->master, "RTDM device %s closed.\n",
++			dev->name);
++#endif
++}
++
++#if DEBUG_RTDM
++struct ec_ioctl_desc {
++	unsigned int cmd;
++	const char *name;
++};
++
++#define EC_IOCTL_DEF(ioctl)	\
++	[_IOC_NR(ioctl)] = {	\
++		.cmd = ioctl,	\
++		.name = #ioctl	\
++	}
++
++static const struct ec_ioctl_desc ec_ioctls[] = {
++	EC_IOCTL_DEF(EC_IOCTL_MODULE),
++	EC_IOCTL_DEF(EC_IOCTL_MASTER),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_SYNC),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_SYNC_PDO),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_SYNC_PDO_ENTRY),
++	EC_IOCTL_DEF(EC_IOCTL_DOMAIN),
++	EC_IOCTL_DEF(EC_IOCTL_DOMAIN_FMMU),
++	EC_IOCTL_DEF(EC_IOCTL_DOMAIN_DATA),
++	EC_IOCTL_DEF(EC_IOCTL_MASTER_DEBUG),
++	EC_IOCTL_DEF(EC_IOCTL_MASTER_RESCAN),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_STATE),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_SDO),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_SDO_ENTRY),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_SDO_UPLOAD),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_SDO_DOWNLOAD),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_SII_READ),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_SII_WRITE),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_REG_READ),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_REG_WRITE),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_FOE_READ),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_FOE_WRITE),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_SOE_READ),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_SOE_WRITE),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_EOE_IP_PARAM),
++	EC_IOCTL_DEF(EC_IOCTL_CONFIG),
++	EC_IOCTL_DEF(EC_IOCTL_CONFIG_PDO),
++	EC_IOCTL_DEF(EC_IOCTL_CONFIG_PDO_ENTRY),
++	EC_IOCTL_DEF(EC_IOCTL_CONFIG_SDO),
++	EC_IOCTL_DEF(EC_IOCTL_CONFIG_IDN),
++#ifdef EC_EOE
++	EC_IOCTL_DEF(EC_IOCTL_EOE_HANDLER),
++#endif
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_DICT_UPLOAD),
++	EC_IOCTL_DEF(EC_IOCTL_REQUEST),
++	EC_IOCTL_DEF(EC_IOCTL_CREATE_DOMAIN),
++	EC_IOCTL_DEF(EC_IOCTL_CREATE_SLAVE_CONFIG),
++	EC_IOCTL_DEF(EC_IOCTL_SELECT_REF_CLOCK),
++	EC_IOCTL_DEF(EC_IOCTL_ACTIVATE),
++	EC_IOCTL_DEF(EC_IOCTL_DEACTIVATE),
++	EC_IOCTL_DEF(EC_IOCTL_SEND),
++	EC_IOCTL_DEF(EC_IOCTL_RECEIVE),
++	EC_IOCTL_DEF(EC_IOCTL_MASTER_STATE),
++	EC_IOCTL_DEF(EC_IOCTL_MASTER_LINK_STATE),
++	EC_IOCTL_DEF(EC_IOCTL_APP_TIME),
++	EC_IOCTL_DEF(EC_IOCTL_SYNC_REF),
++	EC_IOCTL_DEF(EC_IOCTL_SYNC_SLAVES),
++	EC_IOCTL_DEF(EC_IOCTL_REF_CLOCK_TIME),
++	EC_IOCTL_DEF(EC_IOCTL_SYNC_MON_QUEUE),
++	EC_IOCTL_DEF(EC_IOCTL_SYNC_MON_PROCESS),
++	EC_IOCTL_DEF(EC_IOCTL_RESET),
++	EC_IOCTL_DEF(EC_IOCTL_SC_SYNC),
++	EC_IOCTL_DEF(EC_IOCTL_SC_WATCHDOG),
++	EC_IOCTL_DEF(EC_IOCTL_SC_ADD_PDO),
++	EC_IOCTL_DEF(EC_IOCTL_SC_CLEAR_PDOS),
++	EC_IOCTL_DEF(EC_IOCTL_SC_ADD_ENTRY),
++	EC_IOCTL_DEF(EC_IOCTL_SC_CLEAR_ENTRIES),
++	EC_IOCTL_DEF(EC_IOCTL_SC_REG_PDO_ENTRY),
++	EC_IOCTL_DEF(EC_IOCTL_SC_REG_PDO_POS),
++	EC_IOCTL_DEF(EC_IOCTL_SC_DC),
++	EC_IOCTL_DEF(EC_IOCTL_SC_SDO),
++	EC_IOCTL_DEF(EC_IOCTL_SC_EMERG_SIZE),
++	EC_IOCTL_DEF(EC_IOCTL_SC_EMERG_POP),
++	EC_IOCTL_DEF(EC_IOCTL_SC_EMERG_CLEAR),
++	EC_IOCTL_DEF(EC_IOCTL_SC_EMERG_OVERRUNS),
++	EC_IOCTL_DEF(EC_IOCTL_SC_SDO_REQUEST),
++	EC_IOCTL_DEF(EC_IOCTL_SC_REG_REQUEST),
++	EC_IOCTL_DEF(EC_IOCTL_SC_VOE),
++	EC_IOCTL_DEF(EC_IOCTL_SC_STATE),
++	EC_IOCTL_DEF(EC_IOCTL_SC_IDN),
++	EC_IOCTL_DEF(EC_IOCTL_DOMAIN_SIZE),
++	EC_IOCTL_DEF(EC_IOCTL_DOMAIN_OFFSET),
++	EC_IOCTL_DEF(EC_IOCTL_DOMAIN_PROCESS),
++	EC_IOCTL_DEF(EC_IOCTL_DOMAIN_QUEUE),
++	EC_IOCTL_DEF(EC_IOCTL_DOMAIN_STATE),
++	EC_IOCTL_DEF(EC_IOCTL_SDO_REQUEST_INDEX),
++	EC_IOCTL_DEF(EC_IOCTL_SDO_REQUEST_TIMEOUT),
++	EC_IOCTL_DEF(EC_IOCTL_SDO_REQUEST_STATE),
++	EC_IOCTL_DEF(EC_IOCTL_SDO_REQUEST_READ),
++	EC_IOCTL_DEF(EC_IOCTL_SDO_REQUEST_WRITE),
++	EC_IOCTL_DEF(EC_IOCTL_SDO_REQUEST_DATA),
++	EC_IOCTL_DEF(EC_IOCTL_REG_REQUEST_DATA),
++	EC_IOCTL_DEF(EC_IOCTL_REG_REQUEST_STATE),
++	EC_IOCTL_DEF(EC_IOCTL_REG_REQUEST_WRITE),
++	EC_IOCTL_DEF(EC_IOCTL_REG_REQUEST_READ),
++	EC_IOCTL_DEF(EC_IOCTL_VOE_SEND_HEADER),
++	EC_IOCTL_DEF(EC_IOCTL_VOE_REC_HEADER),
++	EC_IOCTL_DEF(EC_IOCTL_VOE_READ),
++	EC_IOCTL_DEF(EC_IOCTL_VOE_READ_NOSYNC),
++	EC_IOCTL_DEF(EC_IOCTL_VOE_WRITE),
++	EC_IOCTL_DEF(EC_IOCTL_VOE_EXEC),
++	EC_IOCTL_DEF(EC_IOCTL_VOE_DATA),
++	EC_IOCTL_DEF(EC_IOCTL_SET_SEND_INTERVAL),
++	EC_IOCTL_DEF(EC_IOCTL_SC_OVERLAPPING_IO),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_REBOOT),
++	EC_IOCTL_DEF(EC_IOCTL_SLAVE_REG_READWRITE),
++	EC_IOCTL_DEF(EC_IOCTL_REG_REQUEST_READWRITE),
++	EC_IOCTL_DEF(EC_IOCTL_SETUP_DOMAIN_MEMORY),
++	EC_IOCTL_DEF(EC_IOCTL_DEACTIVATE_SLAVES),
++	EC_IOCTL_DEF(EC_IOCTL_64_REF_CLK_TIME_QUEUE),
++	EC_IOCTL_DEF(EC_IOCTL_64_REF_CLK_TIME),
++	EC_IOCTL_DEF(EC_IOCTL_SC_FOE_REQUEST),
++	EC_IOCTL_DEF(EC_IOCTL_FOE_REQUEST_FILE),
++	EC_IOCTL_DEF(EC_IOCTL_FOE_REQUEST_TIMEOUT),
++	EC_IOCTL_DEF(EC_IOCTL_FOE_REQUEST_STATE),
++	EC_IOCTL_DEF(EC_IOCTL_FOE_REQUEST_READ),
++	EC_IOCTL_DEF(EC_IOCTL_FOE_REQUEST_WRITE),
++	EC_IOCTL_DEF(EC_IOCTL_FOE_REQUEST_DATA),
++	EC_IOCTL_DEF(EC_IOCTL_RT_SLAVE_REQUESTS),
++	EC_IOCTL_DEF(EC_IOCTL_EXEC_SLAVE_REQUESTS),
++};
++#endif
++
++static int ec_rtdm_ioctl_rt(struct rtdm_fd *fd, unsigned int request,
++			 void __user *arg)
++{
++	struct ec_rtdm_context *ctx = rtdm_fd_to_private(fd);
++	struct rtdm_device *dev = rtdm_fd_device(fd);
++	ec_rtdm_dev_t *rtdm_dev = dev->device_data;
++
++#if DEBUG_RTDM
++	unsigned int nr = _IOC_NR(request);
++	const struct ec_ioctl_desc *ioctl = &ec_ioctls[nr];
++
++	EC_MASTER_INFO(rtdm_dev->master, "ioctl_rt(request = %u, ctl = %02x %s)"
++			" on RTDM device %s.\n", request, _IOC_NR(request),ioctl->name,
++			dev->name);
++#endif
++
++	/*
++	 * FIXME: Execute ioctls from non-rt context except below ioctls to
++	 *	  avoid any unknown system hanging.
++	 */
++	switch (request) {
++	case EC_IOCTL_SEND:
++	case EC_IOCTL_RECEIVE:
++	case EC_IOCTL_MASTER_STATE:
++	case EC_IOCTL_APP_TIME:
++	case EC_IOCTL_SYNC_REF:
++	case EC_IOCTL_SYNC_SLAVES:
++	case EC_IOCTL_REF_CLOCK_TIME:
++	case EC_IOCTL_SC_STATE:
++	case EC_IOCTL_DOMAIN_PROCESS:
++	case EC_IOCTL_DOMAIN_QUEUE:
++	case EC_IOCTL_DOMAIN_STATE:
++		break;
++	default:
++		return -ENOSYS;
++	}
++
++	return ec_ioctl_rtdm(rtdm_dev->master, &ctx->ioctl_ctx, request, arg);
++}
++
++static int ec_rtdm_ioctl(struct rtdm_fd *fd, unsigned int request,
++			 void __user *arg)
++{
++	struct ec_rtdm_context *ctx = rtdm_fd_to_private(fd);
++	struct rtdm_device *dev = rtdm_fd_device(fd);
++	ec_rtdm_dev_t *rtdm_dev = dev->device_data;
++
++#if DEBUG_RTDM
++	unsigned int nr = _IOC_NR(request);
++	const struct ec_ioctl_desc *ioctl = &ec_ioctls[nr];
++
++	EC_MASTER_INFO(rtdm_dev->master, "ioctl(request = %u, ctl = %02x %s)"
++			" on RTDM device %s.\n", request, _IOC_NR(request),ioctl->name,
++			dev->name);
++#endif
++
++	return ec_ioctl_rtdm(rtdm_dev->master, &ctx->ioctl_ctx, request, arg);
++}
++
++static struct rtdm_driver ec_rtdm_driver = {
++	.profile_info		= RTDM_PROFILE_INFO(ec_rtdm,
++						    RTDM_CLASS_EXPERIMENTAL,
++						    222,
++						    0),
++	.device_flags		= RTDM_NAMED_DEVICE,
++	.device_count		= 1,
++	.context_size		= sizeof(struct ec_rtdm_context),
++	.ops = {
++		.open		= ec_rtdm_open,
++		.close		= ec_rtdm_close,
++		.ioctl_rt	= ec_rtdm_ioctl_rt,
++		.ioctl_nrt	= ec_rtdm_ioctl,
++	},
++};
++
++int ec_rtdm_dev_init(ec_rtdm_dev_t *rtdm_dev, ec_master_t *master)
++{
++	struct rtdm_device *dev;
++	int ret;
++
++	rtdm_dev->master = master;
++
++	rtdm_dev->dev = kzalloc(sizeof(struct rtdm_device), GFP_KERNEL);
++	if (!rtdm_dev->dev) {
++		EC_MASTER_ERR(master,
++				"Failed to reserve memory for RTDM device.\n");
++		return -ENOMEM;
++	}
++
++	dev = rtdm_dev->dev;
++
++	dev->driver = &ec_rtdm_driver;
++	dev->device_data = rtdm_dev;
++	dev->label = "EtherCAT%u";
++
++	ret = rtdm_dev_register(dev);
++	if (ret) {
++		EC_MASTER_ERR(master, "Initialization of RTDM interface failed"
++				" (return value %i).\n", ret);
++		kfree(dev);
++		return ret;
++	}
++
++	EC_MASTER_INFO(master, "Registered RTDM device %s.\n", dev->name);
++
++	return 0;
++}
++
++void ec_rtdm_dev_clear(ec_rtdm_dev_t *rtdm_dev)
++{
++	rtdm_dev_unregister(rtdm_dev->dev);
++
++	EC_MASTER_INFO(rtdm_dev->master, "Unregistered RTDM device %s.\n",
++			rtdm_dev->dev->name);
++
++	kfree(rtdm_dev->dev);
++}
++
++int ec_rtdm_mmap(ec_ioctl_context_t *ioctl_ctx, void **user_address)
++{
++	struct ec_rtdm_context *ctx =
++		container_of(ioctl_ctx, struct ec_rtdm_context, ioctl_ctx);
++	int ret;
++
++	ret = rtdm_mmap_to_user(ctx->fd,
++			ioctl_ctx->process_data, ioctl_ctx->process_data_size,
++			PROT_READ | PROT_WRITE,
++			user_address,
++			NULL, NULL);
++	if (ret < 0)
++		return ret;
++
++	return 0;
++}

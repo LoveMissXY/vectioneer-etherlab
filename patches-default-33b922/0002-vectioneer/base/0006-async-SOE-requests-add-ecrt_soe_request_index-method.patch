@@ -1,0 +1,163 @@
+From ccb267811187c381ef2641cdc9e9447b666cec49 Mon Sep 17 00:00:00 2001
+From: Mikhail Rudenko <mike.rudenko@gmail.com>
+Date: Mon, 7 Dec 2020 22:54:37 +0300
+Subject: [PATCH 6/9] async SOE requests: add ecrt_soe_request_index() method
+
+---
+ include/ecrt.h       | 14 ++++++++++++++
+ lib/soe_request.c    | 20 ++++++++++++++++++++
+ master/ioctl.c       | 45 ++++++++++++++++++++++++++++++++++++++++++++
+ master/ioctl.h       |  1 +
+ master/soe_request.c |  8 ++++++++
+ 5 files changed, 88 insertions(+)
+
+diff --git a/include/ecrt.h b/include/ecrt.h
+index 154d25d..dc91315 100644
+--- a/include/ecrt.h
++++ b/include/ecrt.h
+@@ -2141,6 +2141,20 @@ void ecrt_sdo_request_read(
+  * SOE request methods.
+  ****************************************************************************/
+ 
++/** Set the SOE index and subindex and prepare for non-complete-access.
++ *
++ * This is valid even if the request was created for complete-access.
++ *
++ * \attention If the SOE index and/or subindex is changed while
++ * ecrt_soe_request_state() returns EC_REQUEST_BUSY, this may lead to
++ * unexpected results.
++ */
++void ecrt_soe_request_idn(
++        ec_soe_request_t *req, /**< SOE request. */
++        uint8_t drive_no, /**< SOE drive no. */
++        uint16_t idn /**< SOE IDN. */
++        );
++
+ /** Access to the SOE request's data.
+  *
+  * This function returns a pointer to the request's internal SOE data memory.
+diff --git a/lib/soe_request.c b/lib/soe_request.c
+index c5c107c..d8c7cf3 100644
+--- a/lib/soe_request.c
++++ b/lib/soe_request.c
+@@ -54,6 +54,26 @@ void ec_soe_request_clear(ec_soe_request_t *req)
+  * Application interface.
+  ****************************************************************************/
+ 
++void ecrt_soe_request_index(ec_soe_request_t *req, uint8_t drive_no,
++        uint16_t idn)
++{
++    ec_ioctl_soe_request_t data;
++    int ret;
++
++    data.config_index = req->config->index;
++    data.request_index = req->index;
++    data.drive_no = drive_no;
++    data.idn = idn;
++
++    ret = ioctl(req->config->master->fd, EC_IOCTL_SOE_REQUEST_IDN, &data);
++    if (EC_IOCTL_IS_ERROR(ret)) {
++        EC_PRINT_ERR("Failed to set SOE request drive_no/idn: %s\n",
++                strerror(EC_IOCTL_ERRNO(ret)));
++    }
++}
++
++/*****************************************************************************/
++
+ uint8_t *ecrt_soe_request_data(ec_soe_request_t *req)
+ {
+     return req->data;
+diff --git a/master/ioctl.c b/master/ioctl.c
+index 90109b6..4436b03 100755
+--- a/master/ioctl.c
++++ b/master/ioctl.c
+@@ -5433,6 +5433,44 @@ static ATTRIBUTES int ec_ioctl_sc_create_soe_request(
+ 
+ /*****************************************************************************/
+ 
++/** Sets an SOE request's SOE index and subindex.
++ *
++ * \return Zero on success, otherwise a negative error code.
++ */
++static ATTRIBUTES int ec_ioctl_soe_request_idn(
++        ec_master_t *master, /**< EtherCAT master. */
++        void *arg, /**< ioctl() argument. */
++        ec_ioctl_context_t *ctx /**< Private data structure of file handle. */
++        )
++{
++    ec_ioctl_soe_request_t data;
++    ec_slave_config_t *sc;
++    ec_soe_request_t *req;
++
++    if (unlikely(!ctx->requested))
++        return -EPERM;
++
++    if (copy_from_user(&data, (void __user *) arg, sizeof(data)))
++        return -EFAULT;
++
++    /* no locking of master_sem needed, because neither sc nor req will not be
++     * deleted in the meantime. */
++
++    if (!(sc = ec_master_get_config(master, data.config_index))) {
++        return -ENOENT;
++    }
++
++    if (!(req = ec_slave_config_find_soe_request(sc, data.request_index))) {
++        return -ENOENT;
++    }
++
++    ecrt_soe_request_idn(req, data.drive_no, data.idn);
++
++    return 0;
++}
++
++/*****************************************************************************/
++
+ static ATTRIBUTES int ec_ioctl_soe_request_state(
+         ec_master_t *master, /**< EtherCAT master. */
+         void *arg, /**< ioctl() argument. */
+@@ -6293,6 +6331,13 @@ long EC_IOCTL(
+             }
+             ret = ec_ioctl_sc_create_soe_request(master, arg, ctx);
+             break;
++        case EC_IOCTL_SOE_REQUEST_IDN:
++            if (!ctx->writable) {
++                ret = -EPERM;
++                break;
++            }
++            ret = ec_ioctl_soe_request_idn(master, arg, ctx);
++            break;
+         case EC_IOCTL_SOE_REQUEST_STATE:
+             ret = ec_ioctl_soe_request_state(master, arg, ctx);
+             break;
+diff --git a/master/ioctl.h b/master/ioctl.h
+index bdf6d5a..c2663c1 100644
+--- a/master/ioctl.h
++++ b/master/ioctl.h
+@@ -196,6 +196,7 @@
+ #define EC_IOCTL_SOE_REQUEST_READ     EC_IOWR(0x82, ec_ioctl_soe_request_t)
+ #define EC_IOCTL_SOE_REQUEST_WRITE    EC_IOWR(0x83, ec_ioctl_soe_request_t)
+ #define EC_IOCTL_SOE_REQUEST_DATA     EC_IOWR(0x84, ec_ioctl_soe_request_t)
++#define EC_IOCTL_SOE_REQUEST_IDN      EC_IOWR(0x85, ec_ioctl_soe_request_t)
+ 
+ /*****************************************************************************/
+ 
+diff --git a/master/soe_request.c b/master/soe_request.c
+index 88d6917..c852cb7 100644
+--- a/master/soe_request.c
++++ b/master/soe_request.c
+@@ -283,3 +283,11 @@ uint8_t *ecrt_soe_request_data(ec_soe_request_t *req)
+ {
+     return req->data;
+ }
++
++/*****************************************************************************/
++
++void ecrt_soe_request_idn(ec_soe_request_t *req, uint8_t drive_no, uint16_t idn)
++{
++    ec_soe_request_set_drive_no(req, drive_no);
++    ec_soe_request_set_idn(req, idn);
++}
+-- 
+2.25.1
+

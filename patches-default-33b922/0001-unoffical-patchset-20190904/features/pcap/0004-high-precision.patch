@@ -1,0 +1,42 @@
+From: Gavin Lambert <gavin.lambert@tomra.com>
+Date: Wed Sep 04 17:29:16 2019 +1200
+
+Use higher precision timetamps when not using RTDM.
+
+diff --git a/master/device.c b/master/device.c
+--- a/master/device.c
++++ b/master/device.c
+@@ -330,7 +330,11 @@ static void pcap_record(
+             
+             // fill in pcap frame header info
+             pcaphdr = curr_data;
++#ifdef EC_RTDM
+             jiffies_to_timeval(device->jiffies_poll, &t);
++#else
++            t = device->timeval_poll;
++#endif
+             pcaphdr->ts_sec   = t.tv_sec;
+             pcaphdr->ts_usec  = t.tv_usec;
+             pcaphdr->incl_len = size;
+@@ -526,6 +530,9 @@ void ec_device_poll(
+     device->jiffies_poll = jiffies;
+ #ifdef EC_DEBUG_RING
+     do_gettimeofday(&device->timeval_poll);
++#elif !defined(EC_RTDM)
++    if (pcap_size)
++        do_gettimeofday(&device->timeval_poll);
+ #endif
+     device->poll(device->dev);
+ }
+diff --git a/master/device.h b/master/device.h
+--- a/master/device.h
++++ b/master/device.h
+@@ -91,7 +91,7 @@ struct ec_device
+ #ifdef EC_HAVE_CYCLES
+     cycles_t cycles_poll; /**< cycles of last poll */
+ #endif
+-#ifdef EC_DEBUG_RING
++#if defined(EC_DEBUG_RING) || !defined(EC_RTDM)
+     struct timeval timeval_poll;
+ #endif
+     unsigned long jiffies_poll; /**< jiffies of last poll */

@@ -1,0 +1,952 @@
+From 2780c2ffb255e189dbb2dee47df402979ed5b012 Mon Sep 17 00:00:00 2001
+From: Mikhail Rudenko <mike.rudenko@gmail.com>
+Date: Sat, 5 Dec 2020 22:47:14 +0300
+Subject: [PATCH 2/9] async SOE requests: kernel part
+
+---
+ include/ecrt.h        | 107 ++++++++++++++++-
+ master/fsm_slave.c    |  70 ++++++++++--
+ master/ioctl.c        | 259 ++++++++++++++++++++++++++++++++++++++++--
+ master/ioctl.h        |  22 ++++
+ master/module.c       |   4 +-
+ master/slave_config.c |  88 +++++++++++++-
+ master/slave_config.h |   6 +-
+ master/soe_request.c  |  31 +++++
+ master/soe_request.h  |   4 +-
+ 9 files changed, 563 insertions(+), 28 deletions(-)
+
+diff --git a/include/ecrt.h b/include/ecrt.h
+index a0b48ae..3aa0916 100644
+--- a/include/ecrt.h
++++ b/include/ecrt.h
+@@ -258,6 +258,9 @@ typedef struct ec_voe_handler ec_voe_handler_t; /**< \see ec_voe_handler. */
+ struct ec_reg_request;
+ typedef struct ec_reg_request ec_reg_request_t; /**< \see ec_reg_request. */
+ 
++struct ec_soe_request;
++typedef struct ec_soe_request ec_soe_request_t;
++
+ /*****************************************************************************/
+ 
+ /** Master state.
+@@ -1114,7 +1117,7 @@ int ecrt_master_eoe_is_open(
+ int ecrt_master_eoe_process(
+         ec_master_t *master /**< EtherCAT master. */
+         );
+-        
++
+ #endif /* !defined(__KERNEL__) && defined(EC_RTDM) && (EC_EOE) */
+ 
+ #ifdef EC_EOE
+@@ -1128,7 +1131,7 @@ int ecrt_master_eoe_addif(
+         uint16_t alias, /**< slave alias. */
+         uint16_t posn /**< slave position. */
+         );
+-        
++
+ /** delete an EOE network interface
+  *
+  * \return 0 on success else negative error code
+@@ -1243,7 +1246,7 @@ int ecrt_master_reference_clock_time(
+ /** Queues the 64bit dc reference slave clock time value datagram for sending.
+  *
+  * The datagram read the 64bit dc timestamp of the DC reference slave.
+- * (register \a 0x0910:0x0917). The result can be checked with the 
++ * (register \a 0x0910:0x0917). The result can be checked with the
+  * ecrt_master_64bit_reference_clock_time() method.
+  */
+ void ecrt_master_64bit_reference_clock_time_queue(
+@@ -1251,7 +1254,7 @@ void ecrt_master_64bit_reference_clock_time_queue(
+         );
+ 
+ /** Get the 64bit dc reference slave clock time.
+- * 
++ *
+  * ecrt_master_64bit_reference_clock_time_queue() must be called in the cycle
+  * prior to calling this method
+  *
+@@ -1291,7 +1294,7 @@ uint32_t ecrt_master_sync_monitor_process(
+ 
+ /** Selects whether to process slave requests by the application or the master
+  *
+- * if rt_slave_requests \a True, slave requests are to be handled by calls to 
++ * if rt_slave_requests \a True, slave requests are to be handled by calls to
+  * ecrt_master_exec_requests() from the applications realtime context,
+  * otherwise the master will handle them from its operation thread
+  *
+@@ -1300,7 +1303,7 @@ uint32_t ecrt_master_sync_monitor_process(
+ int ecrt_master_rt_slave_requests(
+         ec_master_t *master, /**< EtherCAT master. */
+         unsigned int rt_slave_requests /**< if \a True, slave requests are
+-                                       to be handled by calls to 
++                                       to be handled by calls to
+                                       ecrt_master_exec_requests() from
+                                       the applications realtime context. */
+         );
+@@ -2117,6 +2120,98 @@ void ecrt_sdo_request_read(
+         ec_sdo_request_t *req /**< SDO request. */
+         );
+ 
++/*****************************************************************************
++ * SOE request methods.
++ ****************************************************************************/
++
++/** Access to the SOE request's data.
++ *
++ * This function returns a pointer to the request's internal SOE data memory.
++ *
++ * - After a read operation was successful, integer data can be evaluated using
++ *   the EC_READ_*() macros as usual. Example:
++ *   \code
++ *   uint16_t value = EC_READ_U16(ecrt_soe_request_data(soe)));
++ *   \endcode
++ * - If a write operation shall be triggered, the data have to be written to
++ *   the internal memory. Use the EC_WRITE_*() macros, if you are writing
++ *   integer data. Be sure, that the data fit into the memory. The memory size
++ *   is a parameter of ecrt_slave_config_create_soe_request().
++ *   \code
++ *   EC_WRITE_U16(ecrt_soe_request_data(soe), 0xFFFF);
++ *   \endcode
++ *
++ * \attention The return value can be invalid during a read operation, because
++ * the internal SOE data memory could be re-allocated if the read SOE data do
++ * not fit inside.
++ *
++ * \return Pointer to the internal SOE data memory.
++ */
++uint8_t *ecrt_soe_request_data(
++        ec_soe_request_t *req /**< SOE request. */
++        );
++
++/** Returns the current SOE data size.
++ *
++ * When the SOE request is created, the data size is set to the size of the
++ * reserved memory. After a read operation the size is set to the size of the
++ * read data. The size is not modified in any other situation.
++ *
++ * \return SOE data size in bytes.
++ */
++size_t ecrt_soe_request_data_size(
++        const ec_soe_request_t *req /**< SOE request. */
++        );
++
++/** Get the current state of the SOE request.
++ *
++ * \return Request state.
++ */
++#ifdef __KERNEL__
++ec_request_state_t ecrt_soe_request_state(
++        const ec_soe_request_t *req /**< SOE request. */
++    );
++#else
++ec_request_state_t ecrt_soe_request_state(
++        ec_soe_request_t *req /**< SOE request. */
++    );
++#endif
++
++/** Schedule an SOE write operation.
++ *
++ * \attention This method may not be called while ecrt_soe_request_state()
++ * returns EC_REQUEST_BUSY.
++ */
++void ecrt_soe_request_write(
++        ec_soe_request_t *req /**< SOE request. */
++        );
++
++/** Schedule an SOE write operation.
++ *
++ * \attention This method may not be called while ecrt_soe_request_state()
++ * returns EC_REQUEST_BUSY.
++ *
++ * \attention The size must be less than or equal to the size specified
++ * when the request was created.
++ */
++void ecrt_soe_request_write_with_size(
++        ec_soe_request_t *req, /**< SOE request. */
++        size_t size /**< Size of data to write. */
++        );
++
++/** Schedule an SOE read operation.
++ *
++ * \attention This method may not be called while ecrt_soe_request_state()
++ * returns EC_REQUEST_BUSY.
++ *
++ * \attention After calling this function, the return value of
++ * ecrt_soe_request_data() must be considered as invalid while
++ * ecrt_soe_request_state() returns EC_REQUEST_BUSY.
++ */
++void ecrt_soe_request_read(
++        ec_soe_request_t *req /**< SOE request. */
++        );
++
+ /*****************************************************************************
+  * FoE request methods.
+  ****************************************************************************/
+diff --git a/master/fsm_slave.c b/master/fsm_slave.c
+index b360155..7fe99a0 100644
+--- a/master/fsm_slave.c
++++ b/master/fsm_slave.c
+@@ -59,6 +59,7 @@ void ec_fsm_slave_state_reg_request(ec_fsm_slave_t *, ec_datagram_t *);
+ int ec_fsm_slave_action_process_foe(ec_fsm_slave_t *, ec_datagram_t *);
+ void ec_fsm_slave_state_foe_request(ec_fsm_slave_t *, ec_datagram_t *);
+ int ec_fsm_slave_action_process_soe(ec_fsm_slave_t *, ec_datagram_t *);
++int ec_fsm_slave_action_process_config_soe(ec_fsm_slave_t *, ec_datagram_t *);
+ void ec_fsm_slave_state_soe_request(ec_fsm_slave_t *, ec_datagram_t *);
+ #ifdef EC_EOE
+ int ec_fsm_slave_action_process_eoe(ec_fsm_slave_t *, ec_datagram_t *);
+@@ -263,13 +264,13 @@ static int ec_slave_reconnect_to_eoe_handler(
+     }
+ 
+     list_for_each_entry(eoe, &master->eoe_handlers, list) {
+-        if ((eoe->slave == NULL) && 
++        if ((eoe->slave == NULL) &&
+                 (strncmp(name, ec_eoe_name(eoe), EC_DATAGRAM_NAME_SIZE) == 0)) {
+             ec_eoe_link_slave(eoe, slave);
+             return 0;
+         }
+     }
+-    
++
+     // none found
+     return -1;
+ }
+@@ -296,14 +297,14 @@ void ec_fsm_slave_state_scan(
+ 
+ #ifdef EC_EOE
+     if (slave->sii_image && (slave->sii_image->sii.mailbox_protocols & EC_MBOX_EOE)) {
+-        // try to connect to existing eoe handler, 
++        // try to connect to existing eoe handler,
+         // otherwise try to create a new one (if master not active)
+         if (ec_slave_reconnect_to_eoe_handler(slave) == 0) {
+             // reconnected
+         } else if (eoe_autocreate) {
+             // auto create EoE handler for this slave
+             ec_eoe_t *eoe;
+-        
++
+             if (!(eoe = kmalloc(sizeof(ec_eoe_t), GFP_KERNEL))) {
+                 EC_SLAVE_ERR(slave, "Failed to allocate EoE handler memory!\n");
+             } else if (ec_eoe_auto_init(eoe, slave)) {
+@@ -652,10 +653,60 @@ int ec_fsm_slave_action_process_config_sdo(
+     return 0;
+ }
+ 
++/*****************************************************************************/
++/** Check for pending internal SOE requests and process one.
++ *
++ * \return non-zero, if an SOE request is processed.
++ */
++int ec_fsm_slave_action_process_config_soe(
++        ec_fsm_slave_t *fsm, /**< Slave state machine. */
++        ec_datagram_t *datagram /**< Datagram to use. */
++        )
++{
++    ec_slave_t *slave = fsm->slave;
++    ec_soe_request_t *request;
++
++    if (!slave->config) {
++        return 0;
++    }
++
++    list_for_each_entry(request, &slave->config->soe_requests, list) {
++        if (request->state == EC_INT_REQUEST_QUEUED) {
++            /* if (ec_sdo_request_timed_out(request)) { */
++            /*     request->state = EC_INT_REQUEST_FAILURE; */
++            /*     EC_SLAVE_DBG(slave, 1, "Internal SOE request timed out.\n"); */
++            /*     continue; */
++            /* } */
++
++            if (slave->current_state & EC_SLAVE_STATE_ACK_ERR) {
++                EC_SLAVE_WARN(slave, "Aborting SOE request,"
++                        " slave has error flag set.\n");
++                request->state = EC_INT_REQUEST_FAILURE;
++                continue;
++            }
++
++            if (slave->current_state == EC_SLAVE_STATE_INIT) {
++                EC_SLAVE_WARN(slave, "Aborting SOE request, slave is in INIT.\n");
++                request->state = EC_INT_REQUEST_FAILURE;
++                continue;
++            }
++
++            request->state = EC_INT_REQUEST_BUSY;
++            EC_SLAVE_DBG(slave, 1, "Processing internal SOE request...\n");
++            fsm->soe_request = request;
++            fsm->state = ec_fsm_slave_state_soe_request;
++            ec_fsm_soe_transfer(&fsm->fsm_soe, slave, request);
++            ec_fsm_soe_exec(&fsm->fsm_soe, datagram);
++            return 1;
++        }
++    }
++    return 0;
++}
++
+ /*****************************************************************************/
+ 
+ /** Sets the current state of the state machine to IDLE
+- * 
++ *
+  * \return Non-zero if successful; otherwise state machine is busy.
+  */
+ int ec_fsm_slave_set_unready(
+@@ -723,11 +774,16 @@ void ec_fsm_slave_state_ready(
+         return;
+     }
+ 
++    // Check for pending internal SOE requests
++    if (ec_fsm_slave_action_process_config_soe(fsm, datagram)) {
++        return;
++    }
++
+     // Check if the slave needs to read the SDO dictionary
+     if (ec_fsm_slave_action_process_dict(fsm, datagram)) {
+         return;
+     }
+-    
++
+     // Check for pending external SDO requests
+     if (ec_fsm_slave_action_process_sdo(fsm, datagram)) {
+         return;
+@@ -754,7 +810,7 @@ void ec_fsm_slave_state_ready(
+         return;
+     }
+ #endif
+-    
++
+     // Check for pending MBox Gateway requests
+     if (ec_fsm_slave_action_process_mbg(fsm, datagram)) {
+         return;
+diff --git a/master/ioctl.c b/master/ioctl.c
+index 810035d..90109b6 100755
+--- a/master/ioctl.c
++++ b/master/ioctl.c
+@@ -723,7 +723,7 @@ static ATTRIBUTES int ec_ioctl_pcap_data(
+     if (data.data_size > total_size) {
+         data.data_size = total_size;
+     }
+-    
++
+     // fill in pcap header and copy to user mem
+     pcaphdr.magic_number = 0xa1b2c3d4;
+     pcaphdr.version_major = 2;
+@@ -737,7 +737,7 @@ static ATTRIBUTES int ec_ioctl_pcap_data(
+         ec_lock_up(&master->master_sem);
+         return -EFAULT;
+     }
+-    
++
+     // copy pcap data, up to requested size; also copy updated data_size
+     if ( (data_size > 0) &&
+          (copy_to_user((void __user *) (data.target + sizeof(pcap_hdr_t)),
+@@ -746,7 +746,7 @@ static ATTRIBUTES int ec_ioctl_pcap_data(
+         ec_lock_up(&master->master_sem);
+         return -EFAULT;
+     }
+-    
++
+     // remove copied data?
+     // Note: will remove any data that has not been copied
+     if (data.reset_data) {
+@@ -1834,7 +1834,7 @@ static ATTRIBUTES int ec_ioctl_eoe_handler(
+     data.tx_rate = eoe->tx_rate;
+     data.tx_queued_frames = ec_eoe_tx_queued_frames(eoe);
+     data.tx_queue_size = eoe->tx_ring_count;
+-    
++
+     EC_MASTER_DBG(master, 1, "EOE %s Info:\n", eoe->dev->name);
+     EC_MASTER_DBG(master, 1, "  opened:               %u\n", eoe->opened);
+     EC_MASTER_DBG(master, 1, "  rate_jiffies:         %lu\n", eoe->rate_jiffies);
+@@ -2792,7 +2792,7 @@ static ATTRIBUTES int ec_ioctl_rt_slave_requests(
+     ecrt_master_rt_slave_requests(master, rt_slave_requests);
+ 
+     ec_lock_up(&master->master_sem);
+-    
++
+ out_return:
+     return ret;
+ }
+@@ -2814,7 +2814,7 @@ static ATTRIBUTES int ec_ioctl_exec_slave_requests(
+     }
+ 
+     ecrt_master_exec_slave_requests(master);
+-    
++
+     return 0;
+ }
+ 
+@@ -5339,7 +5339,7 @@ static ATTRIBUTES int ec_ioctl_mbox_gateway(
+     if (copy_from_user(&ioctl, (void __user *) arg, sizeof(ioctl))) {
+         return -EFAULT;
+     }
+-    
++
+     // ensure the incoming data will be at least the size of the mailbox header
+     if (ioctl.data_size < EC_MBOX_HEADER_SIZE) {
+         return -EFAULT;
+@@ -5360,7 +5360,7 @@ static ATTRIBUTES int ec_ioctl_mbox_gateway(
+         kfree(data);
+         return -EFAULT;
+     }
+-    
++
+     // send the mailbox packet
+     retval = ec_master_mbox_gateway(master, data,
+             &ioctl.data_size, ioctl.buff_size);
+@@ -5386,6 +5386,222 @@ static ATTRIBUTES int ec_ioctl_mbox_gateway(
+ 
+ /*****************************************************************************/
+ 
++static ATTRIBUTES int ec_ioctl_sc_create_soe_request(
++        ec_master_t *master, /**< EtherCAT master. */
++        void *arg, /**< ioctl() argument. */
++        ec_ioctl_context_t *ctx /**< Private data structure of file handle. */
++        )
++{
++    ec_ioctl_soe_request_t data;
++    ec_slave_config_t *sc;
++    ec_soe_request_t *req;
++
++    if (unlikely(!ctx->requested))
++        return -EPERM;
++
++    if (copy_from_user(&data, (void __user *) arg, sizeof(data))) {
++        return -EFAULT;
++    }
++
++    data.request_index = 0;
++
++    if (ec_lock_down_interruptible(&master->master_sem))
++        return -EINTR;
++
++    sc = ec_master_get_config(master, data.config_index);
++    if (!sc) {
++        ec_lock_up(&master->master_sem);
++        return -ENOENT;
++    }
++
++    list_for_each_entry(req, &sc->soe_requests, list) {
++        data.request_index++;
++    }
++
++    ec_lock_up(&master->master_sem); /** \todo sc could be invalidated */
++
++    req = ecrt_slave_config_create_soe_request_err(sc, data.drive_no,
++            data.idn, data.size);
++    if (IS_ERR(req))
++        return PTR_ERR(req);
++
++    if (copy_to_user((void __user *) arg, &data, sizeof(data)))
++        return -EFAULT;
++
++    return 0;
++}
++
++/*****************************************************************************/
++
++static ATTRIBUTES int ec_ioctl_soe_request_state(
++        ec_master_t *master, /**< EtherCAT master. */
++        void *arg, /**< ioctl() argument. */
++        ec_ioctl_context_t *ctx /**< Private data structure of file handle. */
++        )
++{
++    ec_ioctl_soe_request_t data;
++    ec_slave_config_t *sc;
++    ec_soe_request_t *req;
++
++    if (unlikely(!ctx->requested))
++        return -EPERM;
++
++    if (copy_from_user(&data, (void __user *) arg, sizeof(data)))
++        return -EFAULT;
++
++    /* no locking of master_sem needed, because neither sc nor req will not be
++     * deleted in the meantime. */
++
++    if (!(sc = ec_master_get_config(master, data.config_index))) {
++        return -ENOENT;
++    }
++
++    if (!(req = ec_slave_config_find_soe_request(sc, data.request_index))) {
++        return -ENOENT;
++    }
++
++    data.state = ecrt_soe_request_state(req);
++    if (data.state == EC_REQUEST_SUCCESS && req->dir == EC_DIR_INPUT)
++        data.size = ecrt_soe_request_data_size(req);
++    else
++        data.size = 0;
++
++    if (copy_to_user((void __user *) arg, &data, sizeof(data)))
++        return -EFAULT;
++
++    return 0;
++}
++
++/*****************************************************************************/
++
++/** Starts an SOE read operation.
++ *
++ * \return Zero on success, otherwise a negative error code.
++ */
++static ATTRIBUTES int ec_ioctl_soe_request_read(
++        ec_master_t *master, /**< EtherCAT master. */
++        void *arg, /**< ioctl() argument. */
++        ec_ioctl_context_t *ctx /**< Private data structure of file handle. */
++        )
++{
++    ec_ioctl_soe_request_t data;
++    ec_slave_config_t *sc;
++    ec_soe_request_t *req;
++
++    if (unlikely(!ctx->requested))
++        return -EPERM;
++
++    if (copy_from_user(&data, (void __user *) arg, sizeof(data)))
++        return -EFAULT;
++
++    /* no locking of master_sem needed, because neither sc nor req will not be
++     * deleted in the meantime. */
++
++    if (!(sc = ec_master_get_config(master, data.config_index))) {
++        return -ENOENT;
++    }
++
++    if (!(req = ec_slave_config_find_soe_request(sc, data.request_index))) {
++        return -ENOENT;
++    }
++
++    ecrt_soe_request_read(req);
++    return 0;
++}
++
++/*****************************************************************************/
++
++/** Starts an SOE write operation.
++ *
++ * \return Zero on success, otherwise a negative error code.
++ */
++static ATTRIBUTES int ec_ioctl_soe_request_write(
++        ec_master_t *master, /**< EtherCAT master. */
++        void *arg, /**< ioctl() argument. */
++        ec_ioctl_context_t *ctx /**< Private data structure of file handle. */
++        )
++{
++    ec_ioctl_soe_request_t data;
++    ec_slave_config_t *sc;
++    ec_soe_request_t *req;
++    int ret;
++
++    if (unlikely(!ctx->requested))
++        return -EPERM;
++
++    if (copy_from_user(&data, (void __user *) arg, sizeof(data)))
++        return -EFAULT;
++
++    if (!data.size) {
++        EC_MASTER_ERR(master, "SOE download: Data size may not be zero!\n");
++        return -EINVAL;
++    }
++
++    /* no locking of master_sem needed, because neither sc nor req will not be
++     * deleted in the meantime. */
++
++    if (!(sc = ec_master_get_config(master, data.config_index))) {
++        return -ENOENT;
++    }
++
++    if (!(req = ec_slave_config_find_soe_request(sc, data.request_index))) {
++        return -ENOENT;
++    }
++
++    ret = ec_soe_request_alloc(req, data.size);
++    if (ret)
++        return ret;
++
++    if (copy_from_user(req->data, (void __user *) data.data, data.size))
++        return -EFAULT;
++
++    req->data_size = data.size;
++    ecrt_soe_request_write(req);
++    return 0;
++}
++
++/*****************************************************************************/
++
++/** Read SOE data.
++ *
++ * \return Zero on success, otherwise a negative error code.
++ */
++static ATTRIBUTES int ec_ioctl_soe_request_data(
++        ec_master_t *master, /**< EtherCAT master. */
++        void *arg, /**< ioctl() argument. */
++        ec_ioctl_context_t *ctx /**< Private data structure of file handle. */
++        )
++{
++    ec_ioctl_soe_request_t data;
++    ec_slave_config_t *sc;
++    ec_soe_request_t *req;
++
++    if (unlikely(!ctx->requested))
++        return -EPERM;
++
++    if (copy_from_user(&data, (void __user *) arg, sizeof(data)))
++        return -EFAULT;
++
++    /* no locking of master_sem needed, because neither sc nor req will not be
++     * deleted in the meantime. */
++
++    if (!(sc = ec_master_get_config(master, data.config_index))) {
++        return -ENOENT;
++    }
++
++    if (!(req = ec_slave_config_find_soe_request(sc, data.request_index))) {
++        return -ENOENT;
++    }
++
++    if (copy_to_user((void __user *) data.data, ecrt_soe_request_data(req),
++                ecrt_soe_request_data_size(req)))
++        return -EFAULT;
++
++    return 0;
++}
++
++/*****************************************************************************/
++
+ /** ioctl() function to use.
+  */
+ #ifdef EC_IOCTL_RTDM
+@@ -6070,6 +6286,33 @@ long EC_IOCTL(
+             }
+             ret = ec_ioctl_mbox_gateway(master, arg, ctx);
+             break;
++        case EC_IOCTL_SC_SOE_REQUEST:
++            if (!ctx->writable) {
++                ret = -EPERM;
++                break;
++            }
++            ret = ec_ioctl_sc_create_soe_request(master, arg, ctx);
++            break;
++        case EC_IOCTL_SOE_REQUEST_STATE:
++            ret = ec_ioctl_soe_request_state(master, arg, ctx);
++            break;
++        case EC_IOCTL_SOE_REQUEST_READ:
++            if (!ctx->writable) {
++                ret = -EPERM;
++                break;
++            }
++            ret = ec_ioctl_soe_request_read(master, arg, ctx);
++            break;
++        case EC_IOCTL_SOE_REQUEST_WRITE:
++            if (!ctx->writable) {
++                ret = -EPERM;
++                break;
++            }
++            ret = ec_ioctl_soe_request_write(master, arg, ctx);
++            break;
++        case EC_IOCTL_SOE_REQUEST_DATA:
++            ret = ec_ioctl_soe_request_data(master, arg, ctx);
++            break;
+         default:
+             ret = -ENOTTY;
+             break;
+diff --git a/master/ioctl.h b/master/ioctl.h
+index 3d0c439..bdf6d5a 100644
+--- a/master/ioctl.h
++++ b/master/ioctl.h
+@@ -191,6 +191,12 @@
+ // Mailbox Gateway
+ #define EC_IOCTL_MBOX_GATEWAY         EC_IOWR(0x73, ec_ioctl_mbox_gateway_t)
+ 
++#define EC_IOCTL_SC_SOE_REQUEST       EC_IOWR(0x80, ec_ioctl_soe_request_t)
++#define EC_IOCTL_SOE_REQUEST_STATE    EC_IOWR(0x81, ec_ioctl_soe_request_t)
++#define EC_IOCTL_SOE_REQUEST_READ     EC_IOWR(0x82, ec_ioctl_soe_request_t)
++#define EC_IOCTL_SOE_REQUEST_WRITE    EC_IOWR(0x83, ec_ioctl_soe_request_t)
++#define EC_IOCTL_SOE_REQUEST_DATA     EC_IOWR(0x84, ec_ioctl_soe_request_t)
++
+ /*****************************************************************************/
+ 
+ #define EC_IOCTL_STRING_SIZE 64
+@@ -891,6 +897,22 @@ typedef struct {
+ 
+ /*****************************************************************************/
+ 
++typedef struct {
++    // inputs
++    uint32_t config_index;
++
++    // inputs/outputs
++    uint32_t request_index;
++    uint8_t drive_no;
++    uint16_t idn;
++    size_t size;
++    uint8_t *data;
++    /* uint32_t timeout; */
++    ec_request_state_t state;
++} ec_ioctl_soe_request_t;
++
++/*****************************************************************************/
++
+ #ifdef __KERNEL__
+ 
+ /** Context data structure for file handles.
+diff --git a/master/module.c b/master/module.c
+index 0d56fad..1adf939 100644
+--- a/master/module.c
++++ b/master/module.c
+@@ -113,7 +113,7 @@ int __init ec_init_module(void)
+ {
+     int i, ret = 0;
+ 
+-    EC_INFO("Master driver %s\n", EC_MASTER_VERSION);
++    EC_INFO("Master driver %s (with SOE requests)\n", EC_MASTER_VERSION);
+ 
+     ec_lock_init(&master_sem);
+ 
+@@ -168,7 +168,7 @@ int __init ec_init_module(void)
+         if (ret)
+             goto out_free_masters;
+     }
+-    
++
+     EC_INFO("%u master%s waiting for devices.\n",
+             master_count, (master_count == 1 ? "" : "s"));
+     return ret;
+diff --git a/master/slave_config.c b/master/slave_config.c
+index 7aad780..ac40b27 100755
+--- a/master/slave_config.c
++++ b/master/slave_config.c
+@@ -91,7 +91,7 @@ void ec_slave_config_init(
+     INIT_LIST_HEAD(&sc->reg_requests);
+     INIT_LIST_HEAD(&sc->voe_handlers);
+     INIT_LIST_HEAD(&sc->soe_configs);
+-
++    INIT_LIST_HEAD(&sc->soe_requests);
+     ec_coe_emerg_ring_init(&sc->emerg_ring, sc);
+ }
+ 
+@@ -160,6 +160,13 @@ void ec_slave_config_clear(
+         kfree(soe);
+     }
+ 
++    // free all SOE requests
++    list_for_each_entry_safe(soe, next_soe, &sc->soe_requests, list) {
++        list_del(&soe->list);
++        ec_soe_request_clear(soe);
++        kfree(soe);
++    }
++
+     ec_coe_emerg_ring_clear(&sc->emerg_ring);
+ }
+ 
+@@ -599,6 +606,24 @@ ec_voe_handler_t *ec_slave_config_find_voe_handler(
+ 
+ /*****************************************************************************/
+ 
++ec_soe_request_t *ec_slave_config_find_soe_request(
++    ec_slave_config_t *sc,
++    unsigned int pos
++    )
++{
++    ec_soe_request_t *req;
++
++    list_for_each_entry(req, &sc->soe_requests, list) {
++        if (pos--)
++            continue;
++        return req;
++    }
++
++    return NULL;
++}
++
++/*****************************************************************************/
++
+ /** Expires any requests that have been started on a detached slave.
+  */
+ void ec_slave_config_expire_disconnected_requests(
+@@ -608,6 +633,7 @@ void ec_slave_config_expire_disconnected_requests(
+     ec_sdo_request_t *sdo_req;
+     ec_foe_request_t *foe_req;
+     ec_reg_request_t *reg_req;
++    ec_soe_request_t *soe_req;
+ 
+     if (sc->slave) { return; }
+ 
+@@ -634,6 +660,14 @@ void ec_slave_config_expire_disconnected_requests(
+             reg_req->state = EC_INT_REQUEST_FAILURE;
+         }
+     }
++
++    list_for_each_entry(soe_req, &sc->soe_requests, list) {
++      if (soe_req->state == EC_INT_REQUEST_QUEUED ||
++          soe_req->state == EC_INT_REQUEST_BUSY) {
++        EC_CONFIG_DBG(sc, 1, "Aborting SOE request; no slave attached.\n");
++        soe_req->state = EC_INT_REQUEST_FAILURE;
++      }
++    }
+ }
+ 
+ /******************************************************************************
+@@ -1004,7 +1038,7 @@ void ecrt_slave_config_dc(ec_slave_config_t *sc, uint16_t assign_activate,
+     {
+         sc->dc_sync[1].shift_time = (sync1_cycle_time + sync1_shift_time) %
+                 sync0_cycle_time;
+-              
++
+         if ((sync1_cycle_time + sync1_shift_time) < sc->dc_sync[1].shift_time) {
+             EC_CONFIG_ERR(sc, "Slave Config DC results in a negative "
+                     "sync1 cycle.  Resetting to zero cycle and shift time\n");
+@@ -1241,6 +1275,56 @@ ec_sdo_request_t *ecrt_slave_config_create_sdo_request_complete(
+ 
+ /*****************************************************************************/
+ 
++ec_soe_request_t *ecrt_slave_config_create_soe_request_err(
++        ec_slave_config_t *sc, uint8_t drive_no, uint16_t idn, size_t size)
++{
++    ec_soe_request_t *req;
++    int ret;
++
++    EC_CONFIG_DBG(sc, 1, "%s(sc = 0x%p, "
++            "drive_no = 0x%02X, idn = 0x%04X, size = %zu)\n",
++            __func__, sc, drive_no, idn, size);
++
++    if (!(req = (ec_soe_request_t *)
++                kmalloc(sizeof(ec_soe_request_t), GFP_KERNEL))) {
++        EC_CONFIG_ERR(sc, "Failed to allocate SOE request memory!\n");
++        return ERR_PTR(-ENOMEM);
++    }
++
++    ec_soe_request_init(req);
++    ec_soe_request_set_drive_no(req, drive_no);
++    ec_soe_request_set_idn(req, idn);
++
++    ret = ec_soe_request_alloc(req, size);
++    if (ret < 0) {
++        ec_soe_request_clear(req);
++        kfree(req);
++        return ERR_PTR(ret);
++    }
++
++    // prepare data for optional writing
++    memset(req->data, 0x00, size);
++    req->data_size = size;
++
++    ec_lock_down(&sc->master->master_sem);
++    list_add_tail(&req->list, &sc->soe_requests);
++    ec_lock_up(&sc->master->master_sem);
++
++    return req;
++}
++
++/*****************************************************************************/
++
++ec_soe_request_t *ecrt_slave_config_create_soe_request(
++        ec_slave_config_t *sc, uint8_t drive_no, uint16_t idn, size_t size)
++{
++    ec_soe_request_t *s = ecrt_slave_config_create_soe_request_err(sc, drive_no,
++            idn, size);
++    return IS_ERR(s) ? NULL : s;
++}
++
++/*****************************************************************************/
++
+ /** Same as ecrt_slave_config_create_foe_request(), but with ERR_PTR() return
+  * value.
+  */
+diff --git a/master/slave_config.h b/master/slave_config.h
+index ea9c766..2f44906 100755
+--- a/master/slave_config.h
++++ b/master/slave_config.h
+@@ -148,6 +148,7 @@ struct ec_slave_config {
+     struct list_head voe_handlers; /**< List of VoE handlers. */
+     struct list_head reg_requests; /**< List of register requests. */
+     struct list_head soe_configs; /**< List of SoE configurations. */
++    struct list_head soe_requests; /**< List of SOE requests. */
+ 
+     ec_coe_emerg_ring_t emerg_ring; /**< CoE emergency ring buffer. */
+ };
+@@ -177,17 +178,20 @@ ec_reg_request_t *ec_slave_config_find_reg_request(ec_slave_config_t *,
+         unsigned int);
+ ec_voe_handler_t *ec_slave_config_find_voe_handler(ec_slave_config_t *,
+         unsigned int);
++ec_soe_request_t *ec_slave_config_find_soe_request(ec_slave_config_t *,
++        unsigned int);
+ void ec_slave_config_expire_disconnected_requests(ec_slave_config_t *);
+ 
+ ec_sdo_request_t *ecrt_slave_config_create_sdo_request_err(
+         ec_slave_config_t *, uint16_t, uint8_t, uint8_t, size_t);
++ec_soe_request_t *ecrt_slave_config_create_soe_request_err(
++        ec_slave_config_t *, uint8_t, uint16_t, size_t);
+ ec_foe_request_t *ecrt_slave_config_create_foe_request_err(
+         ec_slave_config_t *, size_t);
+ ec_voe_handler_t *ecrt_slave_config_create_voe_handler_err(
+         ec_slave_config_t *, size_t);
+ ec_reg_request_t *ecrt_slave_config_create_reg_request_err(
+         ec_slave_config_t *, size_t);
+-
+ /*****************************************************************************/
+ 
+ #endif
+diff --git a/master/soe_request.c b/master/soe_request.c
+index 4ad9035..88d6917 100644
+--- a/master/soe_request.c
++++ b/master/soe_request.c
+@@ -252,3 +252,34 @@ void ec_soe_request_write(
+ }
+ 
+ /*****************************************************************************/
++
++ec_request_state_t ecrt_soe_request_state(const ec_soe_request_t *req)
++{
++   return ec_request_state_translation_table[req->state];
++}
++
++/*****************************************************************************/
++
++size_t ecrt_soe_request_data_size(const ec_soe_request_t *req)
++{
++    return req->data_size;
++}
++
++/*****************************************************************************/
++
++void ecrt_soe_request_read(ec_soe_request_t *req) {
++    ec_soe_request_read(req);
++}
++
++/*****************************************************************************/
++
++void ecrt_soe_request_write(ec_soe_request_t *req) {
++    ec_soe_request_write(req);
++}
++
++/*****************************************************************************/
++
++uint8_t *ecrt_soe_request_data(ec_soe_request_t *req)
++{
++    return req->data;
++}
+diff --git a/master/soe_request.h b/master/soe_request.h
+index 40f61aa..d66d7ea 100644
+--- a/master/soe_request.h
++++ b/master/soe_request.h
+@@ -45,7 +45,7 @@
+ 
+ /** Sercos-over-EtherCAT request.
+  */
+-typedef struct {
++struct ec_soe_request {
+     struct list_head list; /**< List item. */
+     uint8_t drive_no; /**< Drive number. */
+     uint16_t idn; /**< Sercos ID-Number. */
+@@ -59,7 +59,7 @@ typedef struct {
+     unsigned long jiffies_sent; /**< Jiffies, when the upload/download
+                                      request was sent. */
+     uint16_t error_code; /**< SoE error code. */
+-} ec_soe_request_t;
++};
+ 
+ /*****************************************************************************/
+ 
+-- 
+2.25.1
+

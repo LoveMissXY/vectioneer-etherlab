@@ -1,0 +1,3923 @@
+From: Graeme Foot <graeme.foot@touchcut.com>
+Date: Mon, 24 Jun 2019 18:28:32 +1200
+
+EtherCAT Mailbox Gateway server.
+
+Provides for UDP and up to 16 TCP connections.  The connections
+are not multi-threaded.
+
+Specification:
+https://www.ethercat.org/memberarea/download/ETG8200_V1i0i0_G_R_MailboxGateway.pdf
+
+To be used with tools such as:
+https://download.beckhoff.com/download/document/automation/twinsafe/twinsafe_loader_en.pdf
+
+diff --git a/Makefile.am b/Makefile.am
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -42,6 +42,10 @@ if BUILD_TOOL
+ SUBDIRS += tool
+ endif
+ 
++if BUILD_MBG
++SUBDIRS += mailbox_gateway
++endif
++
+ if ENABLE_USERLIB
+ SUBDIRS += lib
+ endif
+@@ -59,6 +63,7 @@ DIST_SUBDIRS = \
+ 	include \
+ 	lib \
+ 	m4 \
++	mailbox_gateway \
+ 	master \
+ 	script \
+ 	tool \
+diff --git a/configure.ac b/configure.ac
+--- a/configure.ac
++++ b/configure.ac
+@@ -1084,6 +1084,36 @@ fi
+ AM_CONDITIONAL(BUILD_TOOL, test "x$tool" = "x1")
+ 
+ #------------------------------------------------------------------------------
++# mailbox gateway server
++#-----------------------------------------------------------------------------
++
++AC_MSG_CHECKING([whether to build the mailbox gateway server])
++
++AC_ARG_ENABLE([mbg],
++    AS_HELP_STRING([--enable-mbg],
++                   [Build mailbox gateway server (default: yes)]),
++    [
++        case "${enableval}" in
++            yes) mbg=1
++                ;;
++            no) mbg=0
++                ;;
++            *) AC_MSG_ERROR([Invalid value for --enable-mbg])
++                ;;
++        esac
++    ],
++    [mbg=1]
++)
++
++if test "x${mbg}" = "x1"; then
++    AC_MSG_RESULT([yes])
++else
++    AC_MSG_RESULT([no])
++fi
++
++AM_CONDITIONAL(BUILD_MBG, test "x$mbg" = "x1")
++
++#------------------------------------------------------------------------------
+ # Userspace library generation
+ #------------------------------------------------------------------------------
+ 
+@@ -1441,6 +1471,7 @@ AC_CONFIG_FILES([
+         script/init.d/ethercat
+         script/sysconfig/Makefile
+         tool/Makefile
++        mailbox_gateway/Makefile
+         tty/Kbuild
+         tty/Makefile
+ ])
+diff --git a/mailbox_gateway/CommandMbg.cpp b/mailbox_gateway/CommandMbg.cpp
+new file mode 100644
+--- /dev/null
++++ b/mailbox_gateway/CommandMbg.cpp
+@@ -0,0 +1,567 @@
++/*****************************************************************************
++ *
++ *  $Id$
++ *
++ *  Copyright (C) 2019  Florian Pose, Ingenieurgemeinschaft IgH
++ *
++ *  This file is part of the IgH EtherCAT Master.
++ *
++ *  The IgH EtherCAT Master is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License version 2, as
++ *  published by the Free Software Foundation.
++ *
++ *  The IgH EtherCAT Master is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
++ *  Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License along
++ *  with the IgH EtherCAT Master; if not, write to the Free Software
++ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ *  ---
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ *  vim: expandtab
++ *
++ ****************************************************************************/
++
++#include <arpa/inet.h>
++#include <errno.h>
++#include <netinet/in.h>
++#include <netinet/tcp.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <strings.h>
++#include <unistd.h>
++#include <sys/socket.h>
++#include <sys/types.h>
++#include <string.h>
++
++#include <map>
++#include <iostream>
++#include <iomanip>
++using namespace std;
++
++#include "CommandMbg.h"
++#include "MasterDevice.h"
++#include "NumberListParser.h"
++#include "../master/globals.h"
++
++/*****************************************************************************/
++
++class MasterIndexParser:
++    public NumberListParser
++{
++    protected:
++        int getMax() {
++            MasterDevice dev;
++            dev.setIndex(0U);
++            dev.open(MasterDevice::Read);
++            return (int) dev.getMasterCount() - 1;
++        };
++};
++
++/*****************************************************************************/
++
++CommandMbg::CommandMbg():
++    m_verbosity(Normal)
++{
++    m_terminate = 0;
++}
++
++/*****************************************************************************/
++
++CommandMbg::~CommandMbg()
++{
++}
++
++/*****************************************************************************/
++
++void CommandMbg::setMasters(const string &m)
++{
++    m_masters = m;
++};
++
++/*****************************************************************************/
++
++void CommandMbg::setVerbosity(Verbosity v)
++{
++    m_verbosity = v;
++};
++
++/*****************************************************************************/
++
++void CommandMbg::throwInvalidUsageException(const stringstream &s)
++{
++    throw InvalidUsageException(s);
++}
++
++/*****************************************************************************/
++
++void CommandMbg::throwCommandException(const string &msg)
++{
++    throw CommandException(msg);
++}
++
++/*****************************************************************************/
++
++void CommandMbg::throwCommandException(const stringstream &s)
++{
++    throw CommandException(s);
++}
++
++/*****************************************************************************/
++
++CommandMbg::MasterIndexList CommandMbg::getMasterIndices() const
++{
++    MasterIndexList indices;
++
++    try {
++        MasterIndexParser p;
++        indices = p.parse(m_masters.c_str());
++    } catch (MasterDeviceException &e) {
++        stringstream err;
++        err << "Failed to obtain number of masters: " << e.what();
++        throwCommandException(err);
++    } catch (runtime_error &e) {
++        stringstream err;
++        err << "Invalid master argument '" << m_masters << "': " << e.what();
++        throwInvalidUsageException(err);
++    }
++
++    return indices;
++}
++
++/*****************************************************************************/
++
++unsigned int CommandMbg::getSingleMasterIndex() const
++{
++    MasterIndexList masterIndices = getMasterIndices();
++
++    if (masterIndices.size() != 1) {
++        stringstream err;
++        err << "Single master required!";
++        throwInvalidUsageException(err);
++    }
++
++    return masterIndices.front();
++}
++
++/*****************************************************************************/
++
++bool operator<(
++        const ec_ioctl_config_t &a,
++        const ec_ioctl_config_t &b
++        )
++{
++    return a.alias < b.alias
++        || (a.alias == b.alias && a.position < b.position);
++}
++
++/****************************************************************************/
++
++void CommandMbg::printBuff(uint8_t *in_buffer, size_t in_nbytes)
++{
++    size_t i;
++    
++    for (i = 0; i < in_nbytes; i++) {
++        if (i % 16 == 0) {
++            // add 2 space prefix
++            cout << "  ";
++        }
++        
++        cout << std::setfill('0') << std::setw(2) 
++             << std::hex << (int)(*in_buffer);
++        
++        if (i % 16 == 15) {
++            // add endl after 16 bytes
++            cout << endl;
++        } else if (i % 2 == 1) {
++            // add space after 2 bytes
++            cout << " ";
++        }
++        
++        in_buffer++;
++    }
++    
++    // add final endl?
++    if ( (in_nbytes > 0) && (in_nbytes % 16 != 0) ) {
++        cout << endl;
++    }
++    
++    cout << std::dec;
++}
++
++/****************************************************************************/
++
++int CommandMbg::processMessage(uint8_t *in_buffer, size_t &inout_nbytes)
++{
++    uint8_t                 *buff = in_buffer;
++    ec_ioctl_mbox_gateway_t  ioctl;
++    
++    if (m_verbosity >= CommandMbg::Debug) {
++        cout << "Received packet (size: " << inout_nbytes 
++             << " bytes):" << endl;
++        printBuff(in_buffer, inout_nbytes);
++    }
++    
++    // check there's enough room for the EtherCAT Header
++    // and get the length of the following data
++    if (inout_nbytes < EC_FRAME_HEADER_SIZE) {
++        if (m_verbosity >= CommandMbg::Normal) {
++            cout << "Message error, received bytes < EtherCAT Header size" << endl;
++        }
++        return -1;
++    }
++    ioctl.data_size = EC_READ_U16(buff) & 0x7FF;
++    ioctl.buff_size = MAX_BUFF_SIZE - EC_FRAME_HEADER_SIZE;
++    buff           += EC_FRAME_HEADER_SIZE;
++    
++    // check we have all the data we expect
++    if (inout_nbytes < EC_FRAME_HEADER_SIZE + ioctl.data_size) {
++        if (m_verbosity >= CommandMbg::Normal) {
++            cout << "Message error, received bytes (" << inout_nbytes
++                 << ") < packet size (" << EC_FRAME_HEADER_SIZE + ioctl.data_size
++                 << ")" << endl;
++        }
++        return -1;
++    } else if ( (inout_nbytes > EC_FRAME_HEADER_SIZE + ioctl.data_size) &&
++                (m_verbosity >= CommandMbg::Verbose) ) {
++        cout << "Message warning, received bytes (" << inout_nbytes
++             << ") > packet size (" << EC_FRAME_HEADER_SIZE + ioctl.data_size
++             << "), ignoring extra data" << endl;
++    }
++    
++    m_masterDev->open(MasterDevice::ReadWrite);
++    
++    // send the data
++    ioctl.data = buff;
++    if (m_masterDev->processMessage(&ioctl) < 0) {
++        if (m_verbosity >= CommandMbg::Normal) {
++            cout << "Message failed with code: " << strerror(errno)
++                 << ", Check ethercat logs for more information" << endl;
++        }
++        return -1;
++    }
++
++    m_masterDev->close();
++
++    // update EtherCAT header length and returned byte count
++    EC_WRITE_U16(in_buffer, (ioctl.data_size & 0x7FF) | (EC_READ_U16(in_buffer) & 0xF800));
++    inout_nbytes = EC_FRAME_HEADER_SIZE + ioctl.data_size;
++    
++    if (m_verbosity >= CommandMbg::Debug) {
++        cout << "ECat master replied with (size: " << inout_nbytes
++             << " bytes):" << endl;
++        printBuff(in_buffer, inout_nbytes);
++    }
++    
++    
++    return 0;
++}
++
++/****************************************************************************/
++
++void CommandMbg::execute(const StringVector &args)
++{
++    int                 tcpSockFd;
++    int                 udpSockFd;
++    int                 clientFd;
++    int                 sockFd;
++    struct sockaddr_in  serverAddr;
++    struct sockaddr_in  clientAddr;
++    socklen_t           addrlen;
++    int                 retries;
++    fd_set              masterSet;
++    fd_set              sockSet;
++    int                 minFd;
++    int                 maxFd;
++    int                 tmpFd;
++    int                 limitFd;
++    struct timeval      loopTimeout;
++    int                 nready;
++    uint8_t             buffer[MAX_BUFF_SIZE]; 
++    size_t              nbytes;
++
++    
++    // ensure a single master
++    m_masterDev = new MasterDevice(getSingleMasterIndex());
++
++
++    // create TCP socket
++    tcpSockFd = socket(AF_INET, SOCK_STREAM, 0);
++    if (tcpSockFd == -1) {
++        throwCommandException("Unable to create TCP socket");
++    } else if (m_verbosity >= CommandMbg::Verbose) {
++        cout << "TCP socket created" << endl;
++    }
++
++    // set up the socket to reuse address so that it should bind immediately to
++    // a previously closed port
++    int yes = 1;
++    if (setsockopt(tcpSockFd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
++        throwCommandException("Unable to configure TCP socket (for reuse)");
++    } else if (m_verbosity >= CommandMbg::Verbose) {
++        cout << "TCP socket configured for reuse" << endl;
++    }
++
++    // set up the socket to disable Nagle (ie combining of small packet)
++    // so that we avoid delay
++    if (setsockopt(tcpSockFd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(int)) == -1) {
++        throwCommandException("Unable to configure TCP socket (TCP_NODELAY)");
++    } else if (m_verbosity >= CommandMbg::Verbose) {
++        cout << "TCP socket configured for no Nagle" << endl;
++    }
++
++    // try to bind the TCP socket, retry a few times
++    bzero(&serverAddr, sizeof(serverAddr));
++    serverAddr.sin_family      = AF_INET;
++    serverAddr.sin_port        = htons(SVR_PORT);
++    serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);
++
++    retries = 0;
++    while ( bind(tcpSockFd, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) ) {
++        if (m_verbosity >= CommandMbg::Verbose) {
++            cout << "Unable to bind TCP socket on port " << SVR_PORT << endl;
++        }
++
++        if (++retries >= 30) {
++            stringstream err;
++            err << "Unable to bind TCP socket on port " << SVR_PORT;
++            throwCommandException(err);
++        }
++        
++        sleep(10);
++    }
++    if (m_verbosity >= CommandMbg::Verbose) {
++        cout << "TCP socket bound" << endl;
++    }
++
++    // set up listening for client TCP connections
++    if (listen(tcpSockFd, 10)) {
++        throwCommandException("Error listening for TCP socket connections");
++    } else if (m_verbosity >= CommandMbg::Normal) {
++        cout << "TCP socket listening for connections on port " << SVR_PORT << endl;
++    }
++
++
++    // create UDP socket
++    udpSockFd = socket(AF_INET, SOCK_DGRAM, 0);
++    if (udpSockFd == -1) {
++        throwCommandException("Unable to create UDP socket");
++    } else if (m_verbosity >= CommandMbg::Verbose) {
++        cout << "UDP socket created" << endl;
++    }
++
++    // try to bind the UDP socket, retry a few times
++    retries = 0;
++    while ( bind(udpSockFd, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) ) {
++        if (m_verbosity >= CommandMbg::Verbose) {
++            cout << "Unable to bind UDP socket on port " << SVR_PORT << endl;
++        }
++
++        if (++retries >= 30) {
++            stringstream err;
++            err << "Unable to bind UDP socket on port " << SVR_PORT;
++            throwCommandException(err);
++        }
++        
++        sleep(10);
++    }
++    if (m_verbosity >= CommandMbg::Verbose) {
++        cout << "UDP socket bound" << endl;
++    }
++    if (m_verbosity >= CommandMbg::Normal) {
++        cout << "UDP socket listening for connections on port " << SVR_PORT << endl;
++    }
++
++
++    // clear the socket set
++    FD_ZERO(&masterSet);
++
++    // set the TCP and UDP flags in the socket read set 
++    FD_SET(tcpSockFd, &masterSet);
++    FD_SET(udpSockFd, &masterSet);
++    
++    // get the socket fd range
++    minFd = (tcpSockFd < udpSockFd) ? tcpSockFd : udpSockFd;
++    maxFd = (tcpSockFd > udpSockFd) ? tcpSockFd : udpSockFd;
++    
++    // get the tcp connection limit
++    limitFd = maxFd + MAX_CONNECTIONS;
++
++    if (m_verbosity >= CommandMbg::Debug) {
++        cout << "tcpSockFd " << tcpSockFd
++             << ", udpSockFd " << udpSockFd
++             << ", minFd " << minFd
++             << ", maxFd " << maxFd
++             << ", limitFd " << limitFd << endl;
++    }
++
++    // run the server until
++    while (!m_terminate) {
++        // wait for a socket request (new connection or client request)
++        // Note: uses timeout of 5 seconds to allow checking of terminate flag
++        // Note: copy masterSet (active socket fd's) so that select can return
++        //   the ready sockets to sockSet
++        loopTimeout.tv_sec  = 5;
++        loopTimeout.tv_usec = 0;
++        sockSet = masterSet;
++        nready = select(maxFd+1, &sockSet, NULL, NULL, &loopTimeout);
++        
++        // check for errors
++        if (nready == -1) {
++            int selectErr = errno;
++            if (selectErr == EINTR) {
++                // server interrupted, loop
++                continue;
++            } else {
++                stringstream err;
++                err << "Error during select " << errno 
++                    << ", " << strerror(selectErr);
++                throwCommandException(err);
++            }
++        }
++        
++        // run through the existing connections looking for data to be read
++        // Note: cache the maxFd for the for loop to avoid looping too far
++        //   if a new clientFd is accepted
++        tmpFd = maxFd;
++        for (sockFd = minFd; sockFd <= tmpFd; sockFd++)
++        {
++            // skip if fd is not in set
++            if (!FD_ISSET(sockFd, &sockSet)) {
++                continue;
++            }
++            
++            if (m_verbosity >= CommandMbg::Debug) {
++                cout << "Socket " << sockFd
++                     << " selected" << endl;
++            }
++            
++            if (sockFd == udpSockFd) {
++                // UDP socket datagram
++                addrlen = sizeof(clientAddr);
++                nbytes = recvfrom(udpSockFd, buffer, MAX_BUFF_SIZE, 0,
++                                  (struct sockaddr*)&clientAddr, &addrlen);
++                if (nbytes <= 0) {
++                    // got error or connection closed by client
++                    if ((nbytes == 0) || (errno == ECONNRESET)) {
++                        if (m_verbosity >= CommandMbg::Verbose) {
++                            cout << "UDP client connection closed on " << sockFd << endl;
++                        }
++                    } else {
++                        if (m_verbosity >= CommandMbg::Normal) {
++                            cout << "UDP client read error " << errno 
++                                 << " " << strerror(errno) 
++                                 << ", on " << sockFd << endl;
++                        }
++                    }
++                } else {
++                    // process the frame
++                    if (processMessage(buffer, nbytes) == 0) {
++                        // send the reply
++                        if (sendto(udpSockFd, buffer, nbytes, 0,
++                                   (struct sockaddr*)&clientAddr, sizeof(clientAddr)) < 0) {
++                            // send error
++                            if (m_verbosity >= CommandMbg::Normal) {
++                                cout << "UDP client send error " << errno 
++                                     << " " << strerror(errno) 
++                                     << ", on " << sockFd << endl;
++                            }
++                        }
++                    }
++                }
++            } else if (sockFd == tcpSockFd) {
++                // new TCP socket connection
++                // accept the connection
++                addrlen  = sizeof(clientAddr);
++                clientFd = accept(tcpSockFd, (struct sockaddr*)&clientAddr, &addrlen);
++                
++                // check for error
++                if ( (clientFd == -1) && (m_verbosity >= CommandMbg::Verbose) ) {
++                    cout << "Error accepting TCP client connection" << endl;
++                // check conneciton count
++                } else if (clientFd > limitFd) {
++                    shutdown(clientFd, SHUT_RDWR);
++                    if (m_verbosity >= CommandMbg::Verbose) {
++                        cout << "TCP client connection rejected, too many connections" << endl;
++                    }
++                } else {
++                    if (m_verbosity >= CommandMbg::Verbose) {
++                        cout << "New TCP client connection on " << clientFd << endl;
++                    }
++                    
++                    // add the connection to the master sock set (and min/maxFd's)
++                    FD_SET(clientFd, &masterSet);
++                    if (clientFd < minFd) minFd = clientFd;
++                    if (clientFd > maxFd) maxFd = clientFd;
++                    
++                    if (m_verbosity >= CommandMbg::Debug) {
++                        cout << "minFd " << minFd
++                             << ", maxFd " << maxFd << endl;
++                    }
++                }
++            } else {
++                // TCP client connection
++                nbytes = recv(sockFd, buffer, MAX_BUFF_SIZE, 0);
++                if (nbytes <= 0) {
++                    // got error or connection closed by client
++                    if ((nbytes == 0) || (errno == ECONNRESET)) {
++                       if (m_verbosity >= CommandMbg::Verbose) {
++                            cout << "TCP client connection closed on " << sockFd << endl;
++                        }
++                    } else {
++                        if (m_verbosity >= CommandMbg::Normal) {
++                            cout << "TCP client read error " << errno 
++                                 << " " << strerror(errno) 
++                                 << ", connection closed on " << sockFd << endl;
++                        }
++                    }
++
++                    // close the socket
++                    close(sockFd);
++
++                    // remove from master sock set
++                    FD_CLR(sockFd, &masterSet);
++                } else {
++                    // process the frame
++                    if (processMessage(buffer, nbytes) == 0) {
++                        // reply
++                        if (write(sockFd, buffer, nbytes) < 0) {
++                            // write error
++                            if (m_verbosity >= CommandMbg::Normal) {
++                                cout << "TCP client write error " << errno 
++                                     << " " << strerror(errno) 
++                                     << ", connection closed on " << sockFd << endl;
++                            }
++
++                            // close the socket
++                            close(sockFd);
++
++                            // remove from master sock set
++                            FD_CLR(sockFd, &masterSet);
++                        }
++                    }
++                }
++            }
++        }
++    }
++    
++    if (m_verbosity >= CommandMbg::Normal) {
++        cout << "Server exiting" << endl;
++    }
++}
++
++/*****************************************************************************/
++
++void CommandMbg::terminate()
++{
++    m_terminate = 1;
++};
++
++/****************************************************************************/
+diff --git a/mailbox_gateway/CommandMbg.h b/mailbox_gateway/CommandMbg.h
+new file mode 100644
+--- /dev/null
++++ b/mailbox_gateway/CommandMbg.h
+@@ -0,0 +1,144 @@
++/*****************************************************************************
++ *
++ *  $Id$
++ *
++ *  Copyright (C) 2019  Florian Pose, Ingenieurgemeinschaft IgH
++ *
++ *  This file is part of the IgH EtherCAT Master.
++ *
++ *  The IgH EtherCAT Master is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License version 2, as
++ *  published by the Free Software Foundation.
++ *
++ *  The IgH EtherCAT Master is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
++ *  Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License along
++ *  with the IgH EtherCAT Master; if not, write to the Free Software
++ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ *  ---
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ ****************************************************************************/
++
++#ifndef __MBG_COMMAND_H__
++#define __MBG_COMMAND_H__
++
++#include <stdexcept>
++#include <vector>
++#include <list>
++#include <sstream>
++using namespace std;
++
++#include "../master/ioctl.h"
++
++
++/** server port number (34980) */
++#define SVR_PORT          0x88A4
++
++/** the maximum tcp connection count */
++#define MAX_CONNECTIONS   16
++
++/** the maximum EtherCAT Mailbox Gateway data packet size */
++#define MAX_BUFF_SIZE     1500
++
++
++/****************************************************************************/
++
++class MasterDevice;
++
++/****************************************************************************/
++
++class InvalidUsageException:
++    public runtime_error
++{
++    friend class CommandMbg;
++
++    protected:
++        /** Constructor with stringstream parameter. */
++        InvalidUsageException(
++                const stringstream &s /**< Message. */
++                ): runtime_error(s.str()) {}
++};
++
++/****************************************************************************/
++
++class CommandException:
++    public runtime_error
++{
++    friend class CommandMbg;
++
++    protected:
++        /** Constructor with char * parameter. */
++        CommandException(
++                const string &msg /**< Message. */
++                ): runtime_error(msg) {}
++
++        /** Constructor with stringstream parameter. */
++        CommandException(
++                const stringstream &s /**< Message. */
++                ): runtime_error(s.str()) {}
++};
++
++/****************************************************************************/
++
++class CommandMbg
++{
++    public:
++        CommandMbg();
++        virtual ~CommandMbg();
++
++        typedef list<unsigned int> MasterIndexList;
++        void setMasters(const string &);
++        MasterIndexList getMasterIndices() const;
++        unsigned int getSingleMasterIndex() const;
++
++        enum Verbosity {
++            Quiet,
++            Normal,
++            Verbose,
++            Debug
++        };
++        void setVerbosity(Verbosity);
++        Verbosity getVerbosity() const;
++
++        typedef vector<string> StringVector;
++        void execute(const StringVector &);
++        
++        void terminate();
++
++    protected:
++        enum {BreakAfterBytes = 16};
++
++        static void throwInvalidUsageException(const stringstream &);
++        static void throwCommandException(const string &);
++        static void throwCommandException(const stringstream &);
++
++        int processMessage(uint8_t *, size_t &);
++
++        void printBuff(uint8_t *, size_t);
++        
++    private:
++        string        m_masters;
++        Verbosity     m_verbosity;
++
++        int           m_terminate;
++        MasterDevice *m_masterDev;
++};
++
++/****************************************************************************/
++
++inline CommandMbg::Verbosity CommandMbg::getVerbosity() const
++{
++    return m_verbosity;
++}
++
++/****************************************************************************/
++
++#endif
+diff --git a/mailbox_gateway/Makefile.am b/mailbox_gateway/Makefile.am
+new file mode 100644
+--- /dev/null
++++ b/mailbox_gateway/Makefile.am
+@@ -0,0 +1,61 @@
++#------------------------------------------------------------------------------
++#
++#  $Id$
++#
++#  Copyright (C) 2019  Florian Pose, Ingenieurgemeinschaft IgH
++#
++#  This file is part of the IgH EtherCAT Master.
++#
++#  The IgH EtherCAT Master is free software; you can redistribute it and/or
++#  modify it under the terms of the GNU General Public License version 2, as
++#  published by the Free Software Foundation.
++#
++#  The IgH EtherCAT Master is distributed in the hope that it will be useful,
++#  but WITHOUT ANY WARRANTY; without even the implied warranty of
++#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
++#  Public License for more details.
++#
++#  You should have received a copy of the GNU General Public License along
++#  with the IgH EtherCAT Master; if not, write to the Free Software
++#  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++#
++#  ---
++#
++#  The license mentioned above concerns the source code only. Using the
++#  EtherCAT technology and brand is only permitted in compliance with the
++#  industrial property and similar rights of Beckhoff Automation GmbH.
++#
++#  ---
++#
++#  vim: syntax=automake
++#
++#------------------------------------------------------------------------------
++
++EXTRA_DIST =
++
++bin_PROGRAMS = ethercat_mbg
++
++ethercat_mbg_SOURCES = \
++	CommandMbg.cpp \
++	MasterDevice.cpp \
++	NumberListParser.cpp \
++	main.cpp
++
++noinst_HEADERS = \
++	CommandMbg.h \
++	MasterDevice.h \
++	NumberListParser.h
++
++REV = `if test -s $(top_srcdir)/revision; then \
++		cat $(top_srcdir)/revision; \
++	else \
++		hg id -i $(top_srcdir) 2>/dev/null || echo "unknown"; \
++	fi`
++
++ethercat_mbg_CXXFLAGS = \
++	-I$(top_srcdir)/include \
++	-I$(top_srcdir)/master \
++	-Wall -DREV=$(REV) \
++	-fno-strict-aliasing
++
++#------------------------------------------------------------------------------
+diff --git a/mailbox_gateway/MasterDevice.cpp b/mailbox_gateway/MasterDevice.cpp
+new file mode 100644
+--- /dev/null
++++ b/mailbox_gateway/MasterDevice.cpp
+@@ -0,0 +1,124 @@
++/*****************************************************************************
++ *
++ *  $Id$
++ *
++ *  Copyright (C) 2006-2009  Florian Pose, Ingenieurgemeinschaft IgH
++ *
++ *  This file is part of the IgH EtherCAT Master.
++ *
++ *  The IgH EtherCAT Master is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License version 2, as
++ *  published by the Free Software Foundation.
++ *
++ *  The IgH EtherCAT Master is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
++ *  Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License along
++ *  with the IgH EtherCAT Master; if not, write to the Free Software
++ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ *  ---
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ ****************************************************************************/
++
++#include <sys/stat.h>
++#include <fcntl.h>
++#include <errno.h>
++#include <sys/ioctl.h>
++#include <string.h>
++#include <unistd.h>
++
++#include <sstream>
++#include <iomanip>
++using namespace std;
++
++#include "MasterDevice.h"
++
++/****************************************************************************/
++
++MasterDevice::MasterDevice(unsigned int index):
++    m_index(index),
++    m_masterCount(0U),
++    m_fd(-1)
++{
++}
++
++/****************************************************************************/
++
++MasterDevice::~MasterDevice()
++{
++    close();
++}
++
++/****************************************************************************/
++
++void MasterDevice::setIndex(unsigned int i)
++{
++    m_index = i;
++}
++
++/****************************************************************************/
++
++void MasterDevice::open(Permissions perm)
++{
++    stringstream deviceName;
++
++    if (m_fd == -1) { // not already open
++        ec_ioctl_module_t module_data;
++        deviceName << "/dev/EtherCAT" << m_index;
++
++        if ((m_fd = ::open(deviceName.str().c_str(),
++                           perm == ReadWrite ? O_RDWR : O_RDONLY)) == -1) {
++            stringstream err;
++            err << "Failed to open master device " << deviceName.str() << ": "
++                << strerror(errno);
++            throw MasterDeviceException(err);
++        }
++
++        getModule(&module_data);
++        if (module_data.ioctl_version_magic != EC_IOCTL_VERSION_MAGIC) {
++            stringstream err;
++            err << "ioctl() version magic is differing: "
++                << deviceName.str() << ": " << module_data.ioctl_version_magic
++                << ", ethercat tool: " << EC_IOCTL_VERSION_MAGIC;
++            throw MasterDeviceException(err);
++        }
++        m_masterCount = module_data.master_count;
++    }
++}
++
++/****************************************************************************/
++
++void MasterDevice::close()
++{
++    if (m_fd != -1) {
++        ::close(m_fd);
++        m_fd = -1;
++    }
++}
++
++/****************************************************************************/
++
++void MasterDevice::getModule(ec_ioctl_module_t *data)
++{
++    if (ioctl(m_fd, EC_IOCTL_MODULE, data) < 0) {
++        stringstream err;
++        err << "Failed to get module information: " << strerror(errno);
++        throw MasterDeviceException(err);
++    }
++}
++
++/****************************************************************************/
++
++int MasterDevice::processMessage(ec_ioctl_mbox_gateway_t *data)
++{
++    return ioctl(m_fd, EC_IOCTL_MBOX_GATEWAY, data);
++}
++
++/*****************************************************************************/
+diff --git a/mailbox_gateway/MasterDevice.h b/mailbox_gateway/MasterDevice.h
+new file mode 100644
+--- /dev/null
++++ b/mailbox_gateway/MasterDevice.h
+@@ -0,0 +1,104 @@
++/*****************************************************************************
++ *
++ *  $Id$
++ *
++ *  Copyright (C) 2006-2009  Florian Pose, Ingenieurgemeinschaft IgH
++ *
++ *  This file is part of the IgH EtherCAT Master.
++ *
++ *  The IgH EtherCAT Master is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License version 2, as
++ *  published by the Free Software Foundation.
++ *
++ *  The IgH EtherCAT Master is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
++ *  Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License along
++ *  with the IgH EtherCAT Master; if not, write to the Free Software
++ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ *  ---
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ ****************************************************************************/
++
++#ifndef __MASTER_DEVICE_H__
++#define __MASTER_DEVICE_H__
++
++#include <stdexcept>
++#include <sstream>
++using namespace std;
++
++#include "ecrt.h"
++#include "ioctl.h"
++
++/****************************************************************************/
++
++class MasterDeviceException:
++    public runtime_error
++{
++    friend class MasterDevice;
++
++    protected:
++        /** Constructor with string parameter. */
++        MasterDeviceException(
++                const string &s /**< Message. */
++                ): runtime_error(s) {}
++
++        /** Constructor with stringstream parameter. */
++        MasterDeviceException(
++                const stringstream &s /**< Message. */
++                ): runtime_error(s.str()) {}
++};
++
++/****************************************************************************/
++
++class MasterDevice
++{
++    public:
++        MasterDevice(unsigned int = 0U);
++        ~MasterDevice();
++
++        void setIndex(unsigned int);
++        unsigned int getIndex() const;
++
++        enum Permissions {Read, ReadWrite};
++        void open(Permissions);
++        void close();
++
++        int getFD() const;
++
++        void getModule(ec_ioctl_module_t *);
++        
++        int processMessage(ec_ioctl_mbox_gateway_t *);
++
++        unsigned int getMasterCount() const {return m_masterCount;}
++
++    private:
++        unsigned int m_index;
++        unsigned int m_masterCount;
++        int          m_fd;
++};
++
++/****************************************************************************/
++
++inline unsigned int MasterDevice::getIndex() const
++{
++    return m_index;
++}
++
++/****************************************************************************/
++
++inline int MasterDevice::getFD() const
++{
++    return m_fd;
++}
++
++/****************************************************************************/
++
++#endif
+diff --git a/mailbox_gateway/NumberListParser.cpp b/mailbox_gateway/NumberListParser.cpp
+new file mode 100644
+--- /dev/null
++++ b/mailbox_gateway/NumberListParser.cpp
+@@ -0,0 +1,235 @@
++/*****************************************************************************
++ *
++ *  $Id$
++ *
++ *  Copyright (C) 2006-2009  Florian Pose, Ingenieurgemeinschaft IgH
++ *
++ *  This file is part of the IgH EtherCAT Master.
++ *
++ *  The IgH EtherCAT Master is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License version 2, as
++ *  published by the Free Software Foundation.
++ *
++ *  The IgH EtherCAT Master is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
++ *  Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License along
++ *  with the IgH EtherCAT Master; if not, write to the Free Software
++ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ *  ---
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ ****************************************************************************/
++
++#include <cstring>
++#include <sstream>
++#include <stdexcept>
++using namespace std;
++
++#include "NumberListParser.h"
++
++/*****************************************************************************/
++
++NumberListParser::NumberListParser():
++    max(0U),
++    hasMax(false)
++{
++}
++
++/*****************************************************************************/
++
++NumberListParser::~NumberListParser()
++{
++}
++
++/*****************************************************************************/
++
++NumberListParser::List NumberListParser::parse(const char *data)
++{
++    List ret;
++    unsigned int i = 0, size = strlen(data), firstNum = 0U, secondNum = 0U;
++    typedef enum {
++        SectionStart,
++        FirstNumber,
++        Range,
++        SecondNumber,
++        Finished
++    } State;
++    State state = SectionStart;
++
++    while (state != Finished) {
++        switch (state) {
++            case SectionStart:
++                if (i >= size) {
++                    state = Finished;
++                } else if (isNumeric(data[i])) {
++                    firstNum = parseNumber(data, &i, size);
++                    state = FirstNumber;
++                } else if (data[i] == '-') {
++                    firstNum = 0U;
++                    i++;
++                    state = Range;
++                } else if (data[i] == ',') {
++                    i++;
++                } else {
++                    stringstream err;
++                    err << "Invalid character " << data[i]
++                        << " at position " << i << "in state "
++                        << state << "." << endl;
++                    throw runtime_error(err.str());
++                }
++                break;
++
++            case FirstNumber:
++                if (i >= size) {
++                    ret.push_back(firstNum);
++                    state = Finished;
++                } else if (data[i] == '-') {
++                    i++;
++                    state = Range;
++                } else if (data[i] == ',') {
++                    i++;
++                    ret.push_back(firstNum);
++                    state = SectionStart;
++                } else {
++                    stringstream err;
++                    err << "Invalid character " << data[i]
++                        << " at position " << i << "in state "
++                        << state << "." << endl;
++                    throw runtime_error(err.str());
++                }
++                break;
++
++            case Range:
++                if (i >= size) {
++                    int max = maximum();
++                    // only increasing ranges if second number omitted
++                    if (max >= 0 && firstNum <= (unsigned int) max) {
++                        List r = range(firstNum, max);
++                        ret.splice(ret.end(), r);
++                    }
++                    state = Finished;
++                } else if (isNumeric(data[i])) {
++                    secondNum = parseNumber(data, &i, size);
++                    state = SecondNumber;
++                } else if (data[i] == ',') {
++                    int max = maximum();
++                    i++;
++                    if (max >= 0) {
++                        List r = range(firstNum, max);
++                        ret.splice(ret.end(), r);
++                    }
++                    state = SectionStart;
++                } else {
++                    stringstream err;
++                    err << "Invalid character " << data[i]
++                        << " at position " << i << "in state "
++                        << state << "." << endl;
++                    throw runtime_error(err.str());
++                }
++                break;
++
++            case SecondNumber:
++                if (i >= size) {
++                    List r = range(firstNum, secondNum);
++                    ret.splice(ret.end(), r);
++                    state = Finished;
++                } else if (data[i] == ',') {
++                    i++;
++                    List r = range(firstNum, secondNum);
++                    ret.splice(ret.end(), r);
++                    state = SectionStart;
++                } else {
++                    stringstream err;
++                    err << "Invalid character " << data[i]
++                        << " at position " << i << "in state "
++                        << state << "." << endl;
++                    throw runtime_error(err.str());
++                }
++                break;
++
++            default:
++                {
++                    stringstream err;
++                    err << "Invalid state " << state << ".";
++                    throw runtime_error(err.str());
++                }
++        }
++    }
++
++    return ret;
++}
++
++/*****************************************************************************/
++
++int NumberListParser::maximum()
++{
++    if (!hasMax) {
++        max = getMax();
++    }
++
++    return max;
++}
++
++/*****************************************************************************/
++
++bool NumberListParser::isNumeric(char c)
++{
++    return c >= '0' && c <= '9';
++}
++
++/*****************************************************************************/
++
++unsigned int NumberListParser::parseNumber(
++        const char *data,
++        unsigned int *i,
++        unsigned int size
++        )
++{
++    unsigned int numSize = 0U, ret;
++
++    while (*i + numSize < size && isNumeric(data[*i + numSize])) {
++        numSize++;
++    }
++
++    if (numSize) {
++        stringstream str;
++        str << string(data + *i, numSize);
++        str >> ret;
++    } else {
++        throw runtime_error("EOF");
++    }
++
++    *i = *i + numSize;
++    return ret;
++}
++
++/****************************************************************************/
++
++NumberListParser::List NumberListParser::range(
++        unsigned int i,
++        unsigned int j
++        )
++{
++    List ret;
++
++    if (i <= j) {
++        for (; i <= j; i++) {
++            ret.push_back(i);
++        }
++    } else {
++        for (; j <= i; j++) {
++            ret.push_front(j);
++        }
++    }
++
++    return ret;
++}
++
++/****************************************************************************/
+diff --git a/mailbox_gateway/NumberListParser.h b/mailbox_gateway/NumberListParser.h
+new file mode 100644
+--- /dev/null
++++ b/mailbox_gateway/NumberListParser.h
+@@ -0,0 +1,59 @@
++/*****************************************************************************
++ *
++ *  $Id$
++ *
++ *  Copyright (C) 2006-2009  Florian Pose, Ingenieurgemeinschaft IgH
++ *
++ *  This file is part of the IgH EtherCAT Master.
++ *
++ *  The IgH EtherCAT Master is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License version 2, as
++ *  published by the Free Software Foundation.
++ *
++ *  The IgH EtherCAT Master is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
++ *  Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License along
++ *  with the IgH EtherCAT Master; if not, write to the Free Software
++ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ *  ---
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ ****************************************************************************/
++
++#include <list>
++using namespace std;
++
++/*****************************************************************************/
++
++class NumberListParser
++{
++    public:
++        NumberListParser();
++        virtual ~NumberListParser();
++
++        typedef list<unsigned int> List;
++
++        List parse(const char *);
++
++        virtual int getMax() = 0;
++
++    private:
++        int max;
++        bool hasMax;
++
++        int maximum();
++
++        static bool isNumeric(char);
++        static unsigned int parseNumber(const char *, unsigned int *,
++                unsigned int);
++        static List range(unsigned int, unsigned int);
++};
++
++/****************************************************************************/
+diff --git a/mailbox_gateway/README b/mailbox_gateway/README
+new file mode 100644
+--- /dev/null
++++ b/mailbox_gateway/README
+@@ -0,0 +1,141 @@
++------------------------------------------------------------------------------
++
++This is the README file of the IgH EtherCAT Mailbox Gateway server.
++
++$Id$
++
++vim: spelllang=en spell tw=78
++
++------------------------------------------------------------------------------
++
++Contents:
++1) General Information
++2) Building
++3) Running
++4) Testing
++
++------------------------------------------------------------------------------
++
++1) General Information
++======================
++
++Provides an EtherCAT Mailbox Gateway (MBG) server for the IgH EtherCAT Master.
++
++The Mailbox Gateway server provides access for external or remote applications
++to communicate with EtherCAT slave mailboxes.  Based on the specification at:
++https://www.ethercat.org/memberarea/download/ETG8200_V1i0i0_G_R_MailboxGateway.pdf
++
++The server provides for UDP and up to 16 TCP connections.  The connections
++are not multi-threaded.
++
++The server can be used with tools such as:
++https://download.beckhoff.com/download/document/automation/twinsafe/twinsafe_loader_en.pdf
++
++------------------------------------------------------------------------------
++
++2) Building
++===========
++
++Building of the MBG server is controlled by the --enable-mbg configuration
++flag.  Building the MBG server is enabled by default, but can be disabled by
++setting the flag to false.  e.g.:
++
++  --enable-mbg=no
++
++The application is named ethercat_mbg and is installed into /usr/bin/
++
++------------------------------------------------------------------------------
++
++3) Running
++==========
++
++ethercat_mbg can be run directly from the command line as either a foreground
++or background process.  If you have more than one master running you will
++need to select which master the server is providing a gateway for.
++
++As the EtherCAT Mailbox Gateway server port is defined as 34980 (0x88A4) only
++one instance of the server may be running at a time.
++
++The server will pass on any EtherCAT mailbox communication request regardless
++of protocol type.  However if an invalid request is made or any errors occur
++there will be no response from the server.  If no response occurs check the
++ethercat_mbg output logs and the ethercat master logs.
++
++ethercat_mbg outputs log information to stdout.  This can be redirected to a
++log file.  If an internal application error occurs and the application is
++halted the log entry will be output to stderr.
++
++WARNING: The EtherCAT Mailbox Gateway does not provide any security.  It will
++provide direct mailbox access to any slave on the master.
++
++------------------------------------------------------------------------------
++
++4) Testing
++==========
++
++Testing of the gateway can be performed using the netcat utility.  netcat can
++connect to the MBG by either UDP or TCP.  As such you only need to provide
++the mailbox header and data.
++
++e.g.:
++
++  echo '10500A000400000300204018100100000000' | xxd -r -p | netcat -w 1 -u 192.168.0.1 34980 | xxd -p
++
++Where:
++
++        +---------------------- EtherCAT Header
++        |                         length: 16
++        |                         data type: 0x05 (mailbox)
++        |   +------------------ Mailbox Header
++        |   |                     length: 10
++        |   |                     slave address: 4
++        |   |                     type: 0x03 (CoE)
++        |   |           +------ CoE Header
++        |   |           |         service: 2 (SDO request)
++        |   |           |   +-- SDO:
++        |   |           |   |     command specifier: 0x02 (upload request)
++        |   |           |   |     index: 0x1018
++        |   |           |   |     subindex: 0x01
++        |   |           |   |
++  echo '10500A000400000300204018100100000000'
++  
++      echo provides the raw packet information in hexidecimal
++  
++  xxd -r -p
++  
++      xxd, convert hex to binary
++          -r  (reverse) converts hex to binary
++          -p  reads plain (continuous) hex
++
++  netcat -w 1 -u 192.168.0.1 34980
++  
++      netcat, arbitrary TCP and UDP connections and listens
++          -w 1         wait 1 second for replies before exiting
++          -u           UDP connection
++          192.168.0.1  IP address of ethercat_mbg server
++          34980        MBG server port number
++          
++      netcat sends the binary information to the MBG server and listens
++      for a reply.
++      Note: remove the -u parameter to make a TCP connection
++
++  xxd -p
++  
++      xxd, convert the response binary to hex
++          -p  outputs plain (continuous) hex
++
++The above packet is a request for a slaves Vendor ID (CoE item 0x1018:01).
++For a beckhoff module this responds with the following information:
++
++  10500a000400002300304318100102000000
++  
++The last 4 bytes is the response payload in little endian.  So the slave
++has responded with a VendorID of 0x00000002.
++
++Note:
++  The Mailbox Header has a Cnt parameter (bits 5-7 of the last byte 
++  of the header).  If this value is zero the slave should always
++  accept the incoming mailbox request.  If the value is non-zero (1-7)
++  then the slave will only accept the request if the value is different
++  to the previous mailbox request Cnt value.
++
+diff --git a/mailbox_gateway/main.cpp b/mailbox_gateway/main.cpp
+new file mode 100644
+--- /dev/null
++++ b/mailbox_gateway/main.cpp
+@@ -0,0 +1,231 @@
++/*****************************************************************************
++ *
++ *  $Id$
++ *
++ *  Copyright (C) 2019  Florian Pose, Ingenieurgemeinschaft IgH
++ *
++ *  This file is part of the IgH EtherCAT Master.
++ *
++ *  The IgH EtherCAT Master is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License version 2, as
++ *  published by the Free Software Foundation.
++ *
++ *  The IgH EtherCAT Master is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
++ *  Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License along
++ *  with the IgH EtherCAT Master; if not, write to the Free Software
++ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ *  ---
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ ****************************************************************************/
++
++#include <getopt.h>
++#include <libgen.h> // basename()
++#include <stdlib.h>
++#include <unistd.h>
++#include <signal.h>
++#include <execinfo.h>
++#include <string.h>
++
++#include <iostream>
++#include <iomanip>
++using namespace std;
++
++#include "CommandMbg.h"
++#include "MasterDevice.h"
++
++/*****************************************************************************/
++
++string binaryBaseName;
++CommandMbg::StringVector commandArgs;
++
++// option variables
++string                 masters = "-"; // all masters
++CommandMbg::Verbosity  verbosity = CommandMbg::Normal;
++bool                   helpRequested = false;
++CommandMbg            *cmd;
++
++/*****************************************************************************/
++
++string usage()
++{
++    stringstream str;
++
++    str << "Usage: " << binaryBaseName << " [OPTIONS]"
++        << endl << endl;
++
++    str << left
++        << "Options:" << endl
++        << "  --master  -m <master>    Specify the master to provide" << endl
++        << "                           the gateway for if there is more" << endl
++        << "                           than one master." << endl
++        << "                           If there is only one master this" << endl
++        << "                           option is not required." << endl
++        << "  --quiet   -q             Output no information, unless" << endl
++        << "                           there are parameter errors." << endl
++        << "  --verbose -v             Output more information." << endl
++        << "  --debug   -d             Output debug information." << endl
++        << "  --help    -h             Show this help." << endl
++        << endl
++        << "Send bug reports to " << PACKAGE_BUGREPORT << "." << endl;
++
++    return str.str();
++}
++
++/*****************************************************************************/
++
++void getOptions(int argc, char **argv)
++{
++    int c;
++    stringstream str;
++
++    static struct option longOptions[] = {
++        //name,         has_arg,           flag, val
++        {"master",      required_argument, NULL, 'm'},
++        {"quiet",       no_argument,       NULL, 'q'},
++        {"verbose",     no_argument,       NULL, 'v'},
++        {"debug",       no_argument,       NULL, 'd'},
++        {"help",        no_argument,       NULL, 'h'},
++        {}
++    };
++
++    do {
++        c = getopt_long(argc, argv, "m:qvdh", longOptions, NULL);
++
++        switch (c) {
++            case 'm':
++                masters = optarg;
++                break;
++
++            case 'q':
++                verbosity = CommandMbg::Quiet;
++                break;
++
++            case 'v':
++                verbosity = CommandMbg::Verbose;
++                break;
++
++            case 'd':
++                verbosity = CommandMbg::Debug;
++                break;
++
++            case 'h':
++                helpRequested = true;
++                break;
++
++            case '?':
++                cerr << endl << usage();
++                exit(1);
++
++            default:
++                break;
++        }
++    }
++    while (c != -1);
++
++    while (++optind < argc)
++        commandArgs.push_back(string(argv[optind]));
++}
++
++/****************************************************************************/
++
++void halt(int sig)
++{
++    // halt execution immediately
++    exit(128 + sig);
++}
++
++/****************************************************************************/
++
++void terminate(int sig)
++{
++    if (verbosity > CommandMbg::Quiet) {
++        cout << "Application Terminating" << endl;
++    }
++
++    // flag application to terminate
++    if (cmd) {
++        cmd->terminate();
++    } else {
++        // halt execution immediately
++        exit(0);
++    }
++}
++
++/****************************************************************************/
++
++void debug(int sig)
++{
++    if (verbosity > CommandMbg::Quiet) {
++        int   cnt;
++        void *buffer[100];
++
++        cerr << "Application Error: " << sig 
++             << "(" << strsignal(sig) << ")" << endl << endl;
++        
++        // output backtrace to stderr
++        cnt = backtrace(buffer, 100);
++        backtrace_symbols_fd(buffer, cnt, STDERR_FILENO);
++    }
++
++    // exit
++    exit(128 + sig);
++}
++
++/****************************************************************************/
++
++int main(int argc, char **argv)
++{
++    binaryBaseName = basename(argv[0]);
++
++    getOptions(argc, argv);
++
++    if (helpRequested) {
++        cout << usage();
++        return 0;
++    }
++    
++    // set up signal handlers
++    signal(SIGINT, halt);
++    signal(SIGKILL, halt);
++    signal(SIGTERM, terminate);
++    signal(SIGALRM, terminate);
++    signal(SIGBUS, debug);
++    signal(SIGFPE, debug);
++    signal(SIGABRT, debug);
++    signal(SIGSEGV, debug);
++    
++    
++    // run the gateway until cancelled
++    cmd = new CommandMbg();
++    cmd->setMasters(masters);
++    cmd->setVerbosity(verbosity);
++    
++    try {
++        // execute server
++        cmd->execute(commandArgs);
++    } catch (CommandException &e) {
++        // catch application errors and exit
++        if (verbosity > CommandMbg::Quiet) {
++            cerr << "Application Error: " << e.what() << endl;
++        }
++    } catch (runtime_error &e) {
++        // catch unknown errors and exit
++        if (verbosity > CommandMbg::Quiet) {
++            cerr << "Unknown Error: " << e.what() << endl;
++        }
++    }
++
++    
++    return 0;
++}
++
++/****************************************************************************/
+diff --git a/master/Kbuild.in b/master/Kbuild.in
+--- a/master/Kbuild.in
++++ b/master/Kbuild.in
+@@ -47,6 +47,7 @@ ec_master-objs := \
+ 	fsm_foe.o \
+ 	fsm_reboot.o \
+ 	fsm_master.o \
++	fsm_mbox_gateway.o \
+ 	fsm_pdo.o \
+ 	fsm_pdo_entry.o \
+ 	fsm_sii.o \
+@@ -57,6 +58,7 @@ ec_master-objs := \
+ 	ioctl.o \
+ 	mailbox.o \
+ 	master.o \
++	mbox_gateway_request.o \
+ 	module.o \
+ 	pdo.o \
+ 	pdo_entry.o \
+diff --git a/master/Makefile.am b/master/Makefile.am
+--- a/master/Makefile.am
++++ b/master/Makefile.am
+@@ -54,6 +54,7 @@ noinst_HEADERS = \
+ 	fsm_slave_config.c fsm_slave_config.h \
+ 	fsm_slave_scan.c fsm_slave_scan.h \
+ 	fsm_soe.c fsm_soe.h \
++	fsm_mbox_gateway.c fsm_mbox_gateway.h \
+ 	globals.h \
+ 	ioctl.c ioctl.h \
+ 	mailbox.c mailbox.h \
+@@ -74,6 +75,7 @@ noinst_HEADERS = \
+ 	slave_config.c slave_config.h \
+ 	soe_errors.c \
+ 	soe_request.c soe_request.h \
++	mbox_gateway_request.c mbox_gateway_request.h \
+ 	sync.c sync.h \
+ 	sync_config.c sync_config.h \
+ 	voe_handler.c voe_handler.h \
+diff --git a/master/datagram.c b/master/datagram.c
+--- a/master/datagram.c
++++ b/master/datagram.c
+@@ -771,6 +771,13 @@ void ec_mbox_prot_data_prealloc(
+         } else {
+             ec_mbox_data_clear(&slave->mbox_voe_data);
+         }
++        
++        // alloc mailbox gateway if slave supports any protocol
++        if (protocols) {
++            ec_mbox_data_prealloc(&slave->mbox_mbg_data, size);
++        } else {
++            ec_mbox_data_clear(&slave->mbox_mbg_data);
++        }
+     }
+ }
+ 
+diff --git a/master/fsm_master.h b/master/fsm_master.h
+--- a/master/fsm_master.h
++++ b/master/fsm_master.h
+@@ -42,6 +42,7 @@
+ #include "foe_request.h"
+ #include "sdo_request.h"
+ #include "soe_request.h"
++#include "mbox_gateway_request.h"
+ #include "fsm_reboot.h"
+ 
+ /*****************************************************************************/
+diff --git a/master/fsm_mbox_gateway.c b/master/fsm_mbox_gateway.c
+new file mode 100644
+--- /dev/null
++++ b/master/fsm_mbox_gateway.c
+@@ -0,0 +1,585 @@
++/******************************************************************************
++ *
++ *  $Id$
++ *
++ *  Copyright (C) 2019  Florian Pose, Ingenieurgemeinschaft IgH
++ *
++ *  This file is part of the IgH EtherCAT Master.
++ *
++ *  The IgH EtherCAT Master is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License version 2, as
++ *  published by the Free Software Foundation.
++ *
++ *  The IgH EtherCAT Master is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
++ *  Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License along
++ *  with the IgH EtherCAT Master; if not, write to the Free Software
++ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ *  ---
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ *****************************************************************************/
++
++/** \file
++ * EtherCAT Mailbox Gateway state machine.
++ */
++
++/*****************************************************************************/
++
++#include "globals.h"
++#include "master.h"
++#include "mailbox.h"
++#include "fsm_mbox_gateway.h"
++#include "slave_config.h"
++
++/*****************************************************************************/
++
++/** Enable debug output for retries.
++ */
++#define DEBUG_RETRIES 0
++
++/** Enable warning output if transfers take too long.
++ */
++#define DEBUG_LONG 0
++
++/*****************************************************************************/
++
++void ec_fsm_mbg_start(ec_fsm_mbg_t *, ec_datagram_t *);
++void ec_fsm_mbg_request(ec_fsm_mbg_t *, ec_datagram_t *);
++void ec_fsm_mbg_check(ec_fsm_mbg_t *, ec_datagram_t *);
++void ec_fsm_mbg_response(ec_fsm_mbg_t *, ec_datagram_t *);
++void ec_fsm_mbg_response_data(ec_fsm_mbg_t *, ec_datagram_t *);
++
++void ec_fsm_mbg_end(ec_fsm_mbg_t *, ec_datagram_t *);
++void ec_fsm_mbg_error(ec_fsm_mbg_t *, ec_datagram_t *);
++
++/*****************************************************************************/
++
++/** Constructor.
++ */
++void ec_fsm_mbg_init(
++        ec_fsm_mbg_t *fsm /**< Finite state machine */
++        )
++{
++    fsm->state = NULL;
++    fsm->datagram = NULL;
++}
++
++/*****************************************************************************/
++
++/** Destructor.
++ */
++void ec_fsm_mbg_clear(
++        ec_fsm_mbg_t *fsm /**< Finite state machine */
++        )
++{
++}
++
++/*****************************************************************************/
++
++/** Starts to transfer a mailbox gateway request to/from a slave.
++ */
++void ec_fsm_mbg_transfer(
++        ec_fsm_mbg_t *fsm, /**< State machine. */
++        ec_slave_t *slave, /**< EtherCAT slave. */
++        ec_mbg_request_t *request /**< MBox Gateway request. */
++        )
++{
++    fsm->slave = slave;
++    fsm->request = request;
++
++    fsm->state = ec_fsm_mbg_start;
++}
++
++/*****************************************************************************/
++
++/** Executes the current state of the state machine.
++ *
++ * \return 1 if the state machine is still in progress, else 0.
++ */
++int ec_fsm_mbg_exec(
++        ec_fsm_mbg_t *fsm, /**< Finite state machine. */
++        ec_datagram_t *datagram /**< Datagram to use. */
++        )
++{
++    if (fsm->state == ec_fsm_mbg_end || fsm->state == ec_fsm_mbg_error)
++        return 0;
++
++    fsm->state(fsm, datagram);
++
++    if (fsm->state == ec_fsm_mbg_end || fsm->state == ec_fsm_mbg_error) {
++        fsm->datagram = NULL;
++        return 0;
++    }
++
++    fsm->datagram = datagram;
++    return 1;
++}
++
++/*****************************************************************************/
++
++/** Returns, if the state machine terminated with success.
++ * \return non-zero if successful.
++ */
++int ec_fsm_mbg_success(
++        const ec_fsm_mbg_t *fsm /**< Finite state machine */
++        )
++{
++    return fsm->state == ec_fsm_mbg_end;
++}
++
++/******************************************************************************
++ *  MBox gateway state machine
++ *****************************************************************************/
++
++/** Prepare a request.
++ *
++ * \return Zero on success, otherwise a positive error code.
++ */
++int ec_fsm_mbg_prepare_start(
++        ec_fsm_mbg_t *fsm, /**< Finite state machine. */
++        ec_datagram_t *datagram /**< Datagram to use. */
++        )
++{
++    u8 *data;
++    ec_slave_t *slave = fsm->slave;
++    ec_mbg_request_t *request = fsm->request;
++    int ret;
++
++    if (slave->configured_rx_mailbox_size <
++            request->data_size) {
++        EC_SLAVE_ERR(slave, "Mailbox too small!\n");
++        request->error_code = EOVERFLOW;
++        fsm->state = ec_fsm_mbg_error;
++        return request->error_code;
++    }
++
++    // configure datagram header
++    ret = ec_datagram_fpwr(datagram, slave->station_address,
++            slave->configured_rx_mailbox_offset,
++            slave->configured_rx_mailbox_size);
++    if (ret) {
++        request->error_code = ret;
++        fsm->state = ec_fsm_mbg_error;
++        return request->error_code;
++    }
++    
++    // copy payload
++    data = datagram->data;
++    memcpy(data, request->data, request->data_size);
++
++    fsm->state = ec_fsm_mbg_request;
++    
++    return 0;
++}
++
++/****************************************************************************/
++
++/** convert mailbox type number to mailbox prototype flag
++ *
++ * \return 1 on success, otherwise 0 for unknown mailbox type.
++ */
++int mbox_type_to_prot(uint8_t mbox_type, uint8_t *mbox_prot)
++{
++    switch (mbox_type)
++    {
++        case EC_MBOX_TYPE_AOE : { *mbox_prot = EC_MBOX_AOE; } break;
++        case EC_MBOX_TYPE_EOE : { *mbox_prot = EC_MBOX_EOE; } break;
++        case EC_MBOX_TYPE_COE : { *mbox_prot = EC_MBOX_COE; } break;
++        case EC_MBOX_TYPE_FOE : { *mbox_prot = EC_MBOX_FOE; } break;
++        case EC_MBOX_TYPE_SOE : { *mbox_prot = EC_MBOX_SOE; } break;
++        case EC_MBOX_TYPE_VOE : { *mbox_prot = EC_MBOX_VOE; } break;
++        default : {
++            *mbox_prot = 0;
++            return 0;
++        }
++    }
++  
++  return 1;
++}
++
++/****************************************************************************/
++
++/** MBox Gateway state: START.
++ */
++void ec_fsm_mbg_start(
++        ec_fsm_mbg_t *fsm, /**< Finite state machine. */
++        ec_datagram_t *datagram /**< Datagram to use. */
++        )
++{
++    ec_slave_t *slave = fsm->slave;
++    ec_mbg_request_t *request = fsm->request;
++    uint8_t mbox_prot;
++
++    if (fsm->slave->master->debug_level) {
++        EC_SLAVE_DBG(slave, 1, "Mailbox Gateway request.\n");
++        ec_print_data(request->data, request->data_size);
++    }
++
++    if (!slave->sii_image) {
++        EC_SLAVE_ERR(slave, "Slave cannot process Mailbox Gateway request."
++                " SII data not available.\n");
++        request->error_code = EAGAIN;
++        fsm->state = ec_fsm_mbg_error;
++        return;
++    }
++
++    // check protocol type supported by slave
++    if ( (request->data_size < EC_MBOX_HEADER_SIZE) ||
++            !mbox_type_to_prot(EC_READ_U16(request->data + 5) & 0x0F, &mbox_prot) ||
++            !(slave->sii_image->sii.mailbox_protocols & mbox_prot) ) {
++        EC_SLAVE_ERR(slave, "Slave does not support requested mailbox type!\n");
++        request->error_code = EPROTONOSUPPORT;
++        fsm->state = ec_fsm_mbg_error;
++        return;
++    }
++    
++    // cache the mbox type
++    request->mbox_type = EC_READ_U16(request->data + 5) & 0x0F;
++    
++    if (slave->configured_rx_mailbox_size <
++            request->data_size) {
++        EC_SLAVE_ERR(slave, "Mailbox too small!\n");
++        request->error_code = EOVERFLOW;
++        fsm->state = ec_fsm_mbg_error;
++        return;
++    }
++
++
++    fsm->request->jiffies_sent = jiffies;
++    fsm->retries = EC_FSM_RETRIES;
++
++    if (ec_fsm_mbg_prepare_start(fsm, datagram)) {
++        fsm->state = ec_fsm_mbg_error;
++    }
++}
++
++/*****************************************************************************/
++
++/**
++   MBox Gateway: REQUEST.
++   \todo Timeout behavior
++*/
++
++void ec_fsm_mbg_request(
++        ec_fsm_mbg_t *fsm, /**< Finite state machine. */
++        ec_datagram_t *datagram /**< Datagram to use. */
++        )
++{
++    ec_slave_t *slave = fsm->slave;
++    unsigned long diff_ms;
++
++    if (fsm->datagram->state == EC_DATAGRAM_TIMED_OUT && fsm->retries--) {
++        if (ec_fsm_mbg_prepare_start(fsm, datagram)) {
++            fsm->state = ec_fsm_mbg_error;
++        }
++        return;
++    }
++
++    if (fsm->datagram->state != EC_DATAGRAM_RECEIVED) {
++        fsm->request->error_code = EIO;
++        fsm->state = ec_fsm_mbg_error;
++        EC_SLAVE_ERR(slave, "Failed to receive MBox Gateway"
++                " request datagram: ");
++        ec_datagram_print_state(fsm->datagram);
++        return;
++    }
++
++    diff_ms = (jiffies - fsm->request->jiffies_sent) * 1000 / HZ;
++
++    if (fsm->datagram->working_counter != 1) {
++        if (!fsm->datagram->working_counter) {
++            if (diff_ms < fsm->request->response_timeout) {
++#if DEBUG_RETRIES
++                EC_SLAVE_DBG(slave, 1, "Slave did not respond to MBox"
++                        " Gateway request. Retrying after %lu ms...\n",
++                        diff_ms);
++#endif
++                // no response; send request datagram again
++                if (ec_fsm_mbg_prepare_start(fsm, datagram)) {
++                    fsm->state = ec_fsm_mbg_error;
++                }
++                return;
++            }
++        }
++        fsm->request->error_code = EIO;
++        fsm->state = ec_fsm_mbg_error;
++        EC_SLAVE_ERR(slave, "Reception of MBox Gateway request"
++                " failed with timeout after %lu ms: ", diff_ms);
++        ec_datagram_print_wc_error(fsm->datagram);
++        return;
++    }
++
++#if DEBUG_LONG
++    if (diff_ms > 200) {
++        EC_SLAVE_WARN(slave, "MBox Gateway request took %lu ms.\n", diff_ms);
++    }
++#endif
++
++    fsm->jiffies_start = fsm->datagram->jiffies_sent;
++
++    // mailbox read check is skipped if a read request is already ongoing
++    if (ec_read_mbox_locked(slave)) {
++        fsm->state = ec_fsm_mbg_response_data;
++        // the datagram is not used and marked as invalid
++        datagram->state = EC_DATAGRAM_INVALID;
++    } else {
++        ec_slave_mbox_prepare_check(slave, datagram); // can not fail.
++        fsm->retries = EC_FSM_RETRIES;
++        fsm->state = ec_fsm_mbg_check;
++    }
++}
++
++/*****************************************************************************/
++
++/** MBox Gateway state: CHECK.
++ */
++void ec_fsm_mbg_check(
++        ec_fsm_mbg_t *fsm, /**< Finite state machine. */
++        ec_datagram_t *datagram /**< Datagram to use. */
++        )
++{
++    ec_slave_t *slave = fsm->slave;
++
++    if (fsm->datagram->state == EC_DATAGRAM_TIMED_OUT && fsm->retries--) {
++        ec_slave_mbox_prepare_check(slave, datagram); // can not fail.
++        return;
++    }
++
++    if (fsm->datagram->state != EC_DATAGRAM_RECEIVED) {
++        fsm->request->error_code = EIO;
++        fsm->state = ec_fsm_mbg_error;
++        ec_read_mbox_lock_clear(slave);
++        EC_SLAVE_ERR(slave, "Failed to receive MBox Gateway mailbox check"
++                " datagram: ");
++        ec_datagram_print_state(fsm->datagram);
++        return;
++    }
++
++    if (fsm->datagram->working_counter != 1) {
++        fsm->request->error_code = EIO;
++        fsm->state = ec_fsm_mbg_error;
++        ec_read_mbox_lock_clear(slave);
++        EC_SLAVE_ERR(slave, "Reception of MBox Gateway check"
++                " datagram failed: ");
++        ec_datagram_print_wc_error(fsm->datagram);
++        return;
++    }
++
++    if (!ec_slave_mbox_check(fsm->datagram)) {
++        unsigned long diff_ms = 0;
++
++        // check that data is not already received by another read request
++        if (slave->mbox_mbg_data.payload_size > 0) {
++            ec_read_mbox_lock_clear(slave);
++            fsm->state = ec_fsm_mbg_response_data;
++            fsm->state(fsm, datagram);
++            return;
++        }
++
++        diff_ms = (fsm->datagram->jiffies_received - fsm->jiffies_start) *
++        1000 / HZ;
++
++        if (diff_ms >= fsm->request->response_timeout) {
++            fsm->request->error_code = EIO;
++            fsm->state = ec_fsm_mbg_error;
++            ec_read_mbox_lock_clear(slave);
++            EC_SLAVE_ERR(slave, "Timeout after %lu ms while waiting"
++                    " for MBox Gateway response.\n", diff_ms);
++            return;
++        }
++
++        ec_slave_mbox_prepare_check(slave, datagram); // can not fail.
++        fsm->retries = EC_FSM_RETRIES;
++        return;
++    }
++
++    // Fetch response
++    ec_slave_mbox_prepare_fetch(slave, datagram); // can not fail.
++    fsm->retries = EC_FSM_RETRIES;
++    fsm->state = ec_fsm_mbg_response;
++}
++
++/*****************************************************************************/
++
++/**
++   MBox Gateway state: RESPONSE.
++   \todo Timeout behavior
++*/
++
++void ec_fsm_mbg_response(
++        ec_fsm_mbg_t *fsm, /**< Finite state machine. */
++        ec_datagram_t *datagram /**< Datagram to use. */
++        )
++{
++    ec_slave_t *slave = fsm->slave;
++    ec_mbg_request_t *request = fsm->request;
++
++    if (fsm->datagram->state == EC_DATAGRAM_TIMED_OUT && fsm->retries--) {
++        ec_slave_mbox_prepare_fetch(slave, datagram); // can not fail.
++        return;
++    }
++
++    if (fsm->datagram->state != EC_DATAGRAM_RECEIVED) {
++        request->error_code = EIO;
++        fsm->state = ec_fsm_mbg_error;
++        EC_SLAVE_ERR(slave, "Failed to receive MBox Gateway"
++                " response datagram: ");
++        ec_datagram_print_state(fsm->datagram);
++        return;
++    }
++
++    if (fsm->datagram->working_counter != 1) {
++        // only an error if data has not already been read by another read request
++        if (slave->mbox_mbg_data.payload_size == 0) {
++            request->error_code = EIO;
++            fsm->state = ec_fsm_mbg_error;
++            ec_read_mbox_lock_clear(slave);
++            EC_SLAVE_ERR(slave, "Reception of MBox Gateway response failed: ");
++            ec_datagram_print_wc_error(fsm->datagram);
++            return;
++        }
++    }
++    ec_read_mbox_lock_clear(slave);
++    fsm->state = ec_fsm_mbg_response_data;
++    fsm->state(fsm, datagram);
++}
++
++/*****************************************************************************/
++
++/**
++   MBox Gateway state: RESPONSE DATA.
++
++*/
++
++void ec_fsm_mbg_response_data(
++        ec_fsm_mbg_t *fsm, /**< Finite state machine. */
++        ec_datagram_t *datagram /**< Datagram to use. */
++        )
++{
++    ec_slave_t *slave = fsm->slave;
++    ec_mbg_request_t *request = fsm->request;
++    uint8_t *data, mbox_type;
++    size_t data_size;
++    int ret;
++
++    // process the data available or initiate a new mailbox read check
++    if (slave->mbox_mbg_data.payload_size > 0) {
++        slave->mbox_mbg_data.payload_size = 0;
++    } else {
++        // initiate a new mailbox read check if required data is not available
++        if (ec_read_mbox_locked(slave)) {
++            // await current read request and mark the datagram as invalid
++            datagram->state = EC_DATAGRAM_INVALID;
++        } else {
++            ec_slave_mbox_prepare_check(slave, datagram); // can not fail.
++            fsm->state = ec_fsm_mbg_check;
++        }
++        return;
++    }
++
++    // check data is assigned
++    if (!slave->mbox_mbg_data.data) {
++        request->error_code = EPROTO;
++        fsm->state = ec_fsm_mbg_error;
++        EC_SLAVE_ERR(slave, "No mailbox response data received!\n");
++        return;
++    }
++    data      = slave->mbox_mbg_data.data;
++    data_size = EC_READ_U16(data);
++
++    // sanity check that data size received is not too big
++    if (data_size + EC_MBOX_HEADER_SIZE > slave->configured_tx_mailbox_size) {
++        request->error_code = EPROTO;
++        fsm->state = ec_fsm_mbg_error;
++        EC_SLAVE_ERR(slave, "Corrupt mailbox response received!\n");
++        ec_print_data(data, slave->configured_tx_mailbox_size);
++        return;
++    }
++    
++    // check for error response, output to log, but continue
++    mbox_type = EC_READ_U8(data + 5) & 0x0F;
++    if (mbox_type == 0x00) {
++        const ec_code_msg_t *mbox_msg;
++        uint16_t code = EC_READ_U16(data + 8);
++
++        EC_SLAVE_ERR(slave, "Mailbox Gateway error response received - ");
++
++        for (mbox_msg = mbox_error_messages; mbox_msg->code; mbox_msg++) {
++            if (mbox_msg->code != code)
++                continue;
++            printk(KERN_CONT "Code 0x%04X: \"%s\".\n",
++                    mbox_msg->code, mbox_msg->message);
++            break;
++        }
++
++        if (!mbox_msg->code) {
++            printk(KERN_CONT "Unknown error reply code 0x%04X.\n", code);
++        }
++
++        if (slave->master->debug_level && data_size > 0) {
++            ec_print_data(data + EC_MBOX_HEADER_SIZE, data_size);
++        }
++    }
++    
++    // add back on the header size
++    data_size += EC_MBOX_HEADER_SIZE;
++
++    // check the response matches the request mbox type
++    if (mbox_type != request->mbox_type) {
++        request->error_code = EIO;
++        fsm->state = ec_fsm_mbg_error;
++        EC_SLAVE_ERR(slave, "Received mailbox type 0x%02X as response.\n",
++                mbox_type);
++        return;
++    }
++
++    if (slave->master->debug_level) {
++        EC_SLAVE_DBG(slave, 1, "MBox Gateway response:\n");
++        ec_print_data(data, data_size);
++    }
++    
++    ret = ec_mbg_request_copy_data(request, data, data_size);
++    if (ret) {
++        request->error_code = -ret;
++        fsm->state = ec_fsm_mbg_error;
++        return;
++    }
++
++    fsm->state = ec_fsm_mbg_end;
++}
++
++/*****************************************************************************/
++
++/**
++   State: ERROR.
++*/
++
++void ec_fsm_mbg_error(
++        ec_fsm_mbg_t *fsm, /**< Finite state machine. */
++        ec_datagram_t *datagram /**< Datagram to use. */
++        )
++{
++}
++
++/*****************************************************************************/
++
++/**
++   State: END.
++*/
++
++void ec_fsm_mbg_end(
++        ec_fsm_mbg_t *fsm, /**< Finite state machine. */
++        ec_datagram_t *datagram /**< Datagram to use. */
++        )
++{
++}
++
++/*****************************************************************************/
+diff --git a/master/fsm_mbox_gateway.h b/master/fsm_mbox_gateway.h
+new file mode 100644
+--- /dev/null
++++ b/master/fsm_mbox_gateway.h
+@@ -0,0 +1,75 @@
++/******************************************************************************
++ *
++ *  $Id$
++ *
++ *  Copyright (C) 2019  Florian Pose, Ingenieurgemeinschaft IgH
++ *
++ *  This file is part of the IgH EtherCAT Master.
++ *
++ *  The IgH EtherCAT Master is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License version 2, as
++ *  published by the Free Software Foundation.
++ *
++ *  The IgH EtherCAT Master is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
++ *  Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License along
++ *  with the IgH EtherCAT Master; if not, write to the Free Software
++ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ *  ---
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ *****************************************************************************/
++
++/**
++   \file
++   EtherCAT Mailbox Gateway state machine.
++   Note: message fragmentation (segmentation) not supported
++*/
++
++/*****************************************************************************/
++
++#ifndef __EC_FSM_MBG_H__
++#define __EC_FSM_MBG_H__
++
++#include "globals.h"
++#include "datagram.h"
++#include "slave.h"
++#include "mbox_gateway_request.h"
++
++/*****************************************************************************/
++
++typedef struct ec_fsm_mbg ec_fsm_mbg_t; /**< \see ec_fsm_mbg */
++
++/** Finite state machines for the CANopen over EtherCAT protocol.
++ */
++struct ec_fsm_mbg {
++    ec_slave_t *slave; /**< slave the FSM runs on */
++    unsigned int retries; /**< retries upon datagram timeout */
++
++    void (*state)(ec_fsm_mbg_t *, ec_datagram_t *); /**< mbox state function */
++    ec_datagram_t *datagram; /**< Datagram used in last step. */
++    unsigned long jiffies_start; /**< MBox Gateway timestamp. */
++    ec_mbg_request_t *request; /**< MBox Gateway request */
++    uint8_t mbox_type; /**< MBox Gateway header type */
++};
++
++/*****************************************************************************/
++
++void ec_fsm_mbg_init(ec_fsm_mbg_t *);
++void ec_fsm_mbg_clear(ec_fsm_mbg_t *);
++
++void ec_fsm_mbg_transfer(ec_fsm_mbg_t *, ec_slave_t *, ec_mbg_request_t *);
++
++int ec_fsm_mbg_exec(ec_fsm_mbg_t *, ec_datagram_t *);
++int ec_fsm_mbg_success(const ec_fsm_mbg_t *);
++
++/*****************************************************************************/
++
++#endif
+diff --git a/master/fsm_slave.c b/master/fsm_slave.c
+--- a/master/fsm_slave.c
++++ b/master/fsm_slave.c
+@@ -64,6 +64,8 @@ void ec_fsm_slave_state_soe_request(ec_f
+ int ec_fsm_slave_action_process_eoe(ec_fsm_slave_t *, ec_datagram_t *);
+ void ec_fsm_slave_state_eoe_request(ec_fsm_slave_t *, ec_datagram_t *);
+ #endif
++int ec_fsm_slave_action_process_mbg(ec_fsm_slave_t *, ec_datagram_t *);
++void ec_fsm_slave_state_mbg_request(ec_fsm_slave_t *, ec_datagram_t *);
+ 
+ /*****************************************************************************/
+ 
+@@ -86,6 +88,7 @@ void ec_fsm_slave_init(
+ #ifdef EC_EOE
+     fsm->eoe_request = NULL;
+ #endif
++    fsm->mbg_request = NULL;
+     fsm->dict_request = NULL;
+ 
+     ec_dict_request_init(&fsm->int_dict_request);
+@@ -97,6 +100,7 @@ void ec_fsm_slave_init(
+ #ifdef EC_EOE
+     ec_fsm_eoe_init(&fsm->fsm_eoe);
+ #endif
++    ec_fsm_mbg_init(&fsm->fsm_mbg);
+     ec_fsm_pdo_init(&fsm->fsm_pdo, &fsm->fsm_coe);
+     ec_fsm_change_init(&fsm->fsm_change);
+     ec_fsm_slave_config_init(&fsm->fsm_slave_config, fsm->slave,
+@@ -146,6 +150,11 @@ void ec_fsm_slave_clear(
+     }
+ #endif
+ 
++    if (fsm->mbg_request) {
++        fsm->mbg_request->state = EC_INT_REQUEST_FAILURE;
++        wake_up_all(&fsm->slave->master->request_queue);
++    }
++
+     if (fsm->dict_request) {
+         fsm->dict_request->state = EC_INT_REQUEST_FAILURE;
+         wake_up_all(&fsm->slave->master->request_queue);
+@@ -162,6 +171,7 @@ void ec_fsm_slave_clear(
+ #ifdef EC_EOE
+     ec_fsm_eoe_clear(&fsm->fsm_eoe);
+ #endif
++    ec_fsm_mbg_clear(&fsm->fsm_mbg);
+ }
+ 
+ /*****************************************************************************/
+@@ -744,6 +754,11 @@ void ec_fsm_slave_state_ready(
+         return;
+     }
+ #endif
++    
++    // Check for pending MBox Gateway requests
++    if (ec_fsm_slave_action_process_mbg(fsm, datagram)) {
++        return;
++    }
+ }
+ 
+ /*****************************************************************************/
+@@ -1119,6 +1134,93 @@ int ec_fsm_slave_action_process_soe(
+ 
+ /*****************************************************************************/
+ 
++/** Check for pending MBox Gateway requests and process one.
++ *
++ * \return non-zero, if a request is processed.
++ */
++int ec_fsm_slave_action_process_mbg(
++        ec_fsm_slave_t *fsm, /**< Slave state machine. */
++        ec_datagram_t *datagram /**< Datagram to use. */
++        )
++{
++    ec_slave_t *slave = fsm->slave;
++    ec_mbg_request_t *req;
++
++    if (list_empty(&slave->mbg_requests)) {
++        return 0;
++    }
++
++    // take the first request to be processed
++    req = list_entry(slave->mbg_requests.next, ec_mbg_request_t, list);
++    list_del_init(&req->list); // dequeue
++
++    if (slave->current_state & EC_SLAVE_STATE_ACK_ERR) {
++        EC_SLAVE_WARN(slave, "Aborting MBox Gateway request,"
++                " slave has error flag set.\n");
++        req->state = EC_INT_REQUEST_FAILURE;
++        wake_up_all(&slave->master->request_queue);
++        fsm->state = ec_fsm_slave_state_idle;
++        return 0;
++    }
++
++    if (slave->current_state == EC_SLAVE_STATE_INIT) {
++        EC_SLAVE_WARN(slave, "Aborting MBox Gateway request,"
++                " slave is in INIT.\n");
++        req->state = EC_INT_REQUEST_FAILURE;
++        wake_up_all(&slave->master->request_queue);
++        fsm->state = ec_fsm_slave_state_idle;
++        return 0;
++    }
++
++    fsm->mbg_request = req;
++    req->state = EC_INT_REQUEST_BUSY;
++
++    // Found pending request. Execute it!
++    EC_SLAVE_DBG(slave, 1, "Processing MBox Gateway request...\n");
++
++    // Start MBox Gateway transfer
++    fsm->state = ec_fsm_slave_state_mbg_request;
++    ec_fsm_mbg_transfer(&fsm->fsm_mbg, slave, req);
++    ec_fsm_mbg_exec(&fsm->fsm_mbg, datagram); // execute immediately
++    return 1;
++}
++
++/*****************************************************************************/
++
++/** Slave state: MBG_REQUEST.
++ */
++void ec_fsm_slave_state_mbg_request(
++        ec_fsm_slave_t *fsm, /**< Slave state machine. */
++        ec_datagram_t *datagram /**< Datagram to use. */
++        )
++{
++    ec_slave_t *slave = fsm->slave;
++    ec_mbg_request_t *request = fsm->mbg_request;
++
++    if (ec_fsm_mbg_exec(&fsm->fsm_mbg, datagram)) {
++        return;
++    }
++
++    if (!ec_fsm_mbg_success(&fsm->fsm_mbg)) {
++        EC_SLAVE_ERR(slave, "Failed to process MBox Gateway request.\n");
++        request->state = EC_INT_REQUEST_FAILURE;
++        wake_up_all(&slave->master->request_queue);
++        fsm->mbg_request = NULL;
++        fsm->state = ec_fsm_slave_state_ready;
++        return;
++    }
++
++    EC_SLAVE_DBG(slave, 1, "Finished MBox Gateway request.\n");
++
++    // MBox Gateway request finished
++    request->state = EC_INT_REQUEST_SUCCESS;
++    wake_up_all(&slave->master->request_queue);
++    fsm->mbg_request = NULL;
++    fsm->state = ec_fsm_slave_state_ready;
++}
++
++/*****************************************************************************/
++
+ /** Slave state: SOE_REQUEST.
+  */
+ void ec_fsm_slave_state_soe_request(
+diff --git a/master/fsm_slave.h b/master/fsm_slave.h
+--- a/master/fsm_slave.h
++++ b/master/fsm_slave.h
+@@ -42,6 +42,7 @@
+ #include "sdo_request.h"
+ #include "reg_request.h"
+ #include "eoe_request.h"
++#include "mbox_gateway_request.h"
+ #include "dict_request.h"
+ #include "fsm_coe.h"
+ #include "fsm_foe.h"
+@@ -49,6 +50,7 @@
+ #ifdef EC_EOE
+ #include "fsm_eoe.h"
+ #endif
++#include "fsm_mbox_gateway.h"
+ #include "fsm_slave_config.h"
+ #include "fsm_slave_scan.h"
+ 
+@@ -73,6 +75,7 @@ struct ec_fsm_slave {
+ #ifdef EC_EOE
+     ec_eoe_request_t *eoe_request; /**< EoE request to process. */
+ #endif
++    ec_mbg_request_t *mbg_request; /**< MBox Gateway request to process. */
+     ec_dict_request_t *dict_request; /**< Dictionary request to process. */
+ 
+     ec_fsm_coe_t fsm_coe; /**< CoE state machine. */
+@@ -81,6 +84,7 @@ struct ec_fsm_slave {
+ #ifdef EC_EOE
+     ec_fsm_eoe_t fsm_eoe; /**< EoE state machine. */
+ #endif
++    ec_fsm_mbg_t fsm_mbg; /**< MBox Gateway state machine. */
+     ec_fsm_pdo_t fsm_pdo; /**< PDO configuration state machine. */
+     ec_fsm_change_t fsm_change; /**< State change state machine */
+     ec_fsm_slave_scan_t fsm_slave_scan; /**< slave scan state machine */
+diff --git a/master/globals.h b/master/globals.h
+--- a/master/globals.h
++++ b/master/globals.h
+@@ -99,6 +99,12 @@
+ /** Mailbox header size.  */
+ #define EC_MBOX_HEADER_SIZE 6
+ 
++/** CoE header size.  */
++#define EC_COE_HEADER_SIZE 2
++
++/** Mailbox Gateway, Mailbox header slave address offset */
++#define EC_MBG_SLAVE_ADDR_OFFSET 1000
++
+ /** Word offset of first SII category. */
+ #define EC_FIRST_SII_CATEGORY_OFFSET 0x40
+ 
+diff --git a/master/ioctl.c b/master/ioctl.c
+--- a/master/ioctl.c
++++ b/master/ioctl.c
+@@ -5322,6 +5322,70 @@ static ATTRIBUTES int ec_ioctl_eoe_delif
+ 
+ /*****************************************************************************/
+ 
++/** Process an EtherCAT Mailbox Gateway message.
++ *
++ * \return Zero on success, otherwise a negative error code.
++ */
++static ATTRIBUTES int ec_ioctl_mbox_gateway(
++        ec_master_t *master, /**< EtherCAT master. */
++        void *arg, /**< ioctl() argument. */
++        ec_ioctl_context_t *ctx /**< Private data structure of file handle. */
++        )
++{
++    ec_ioctl_mbox_gateway_t ioctl;
++    u8 *data;
++    int retval;
++
++    if (copy_from_user(&ioctl, (void __user *) arg, sizeof(ioctl))) {
++        return -EFAULT;
++    }
++    
++    // ensure the incoming data will be at least the size of the mailbox header
++    if (ioctl.data_size < EC_MBOX_HEADER_SIZE) {
++        return -EFAULT;
++    }
++
++    // ensure the incoming data fits into the max buffer size
++    if (ioctl.data_size > ioctl.buff_size) {
++        return -EFAULT;
++    }
++
++    data = kmalloc(ioctl.buff_size, GFP_KERNEL);
++    if (!data) {
++        EC_MASTER_ERR(master, "Failed to allocate %zu bytes of"
++                " mailbox gateway data.\n", ioctl.buff_size);
++        return -ENOMEM;
++    }
++    if (copy_from_user(data, (void __user *) ioctl.data, ioctl.data_size)) {
++        kfree(data);
++        return -EFAULT;
++    }
++    
++    // send the mailbox packet
++    retval = ec_master_mbox_gateway(master, data,
++            &ioctl.data_size, ioctl.buff_size);
++    if (retval) {
++        kfree(data);
++        return retval;
++    }
++
++    if (copy_to_user((void __user *) ioctl.data,
++                data, ioctl.data_size)) {
++        kfree(data);
++        return -EFAULT;
++    }
++    kfree(data);
++
++    if (__copy_to_user((void __user *) arg, &ioctl, sizeof(ioctl))) {
++        retval = -EFAULT;
++    }
++
++    EC_MASTER_DBG(master, 1, "Finished Mailbox Gateway request.\n");
++    return retval;
++}
++
++/*****************************************************************************/
++
+ /** ioctl() function to use.
+  */
+ #ifdef EC_IOCTL_RTDM
+@@ -5999,6 +6063,13 @@ long EC_IOCTL(
+             ret = ec_ioctl_eoe_delif(master, arg, ctx);
+             break;
+ #endif
++        case EC_IOCTL_MBOX_GATEWAY:
++            if (!ctx->writable) {
++                ret = -EPERM;
++                break;
++            }
++            ret = ec_ioctl_mbox_gateway(master, arg, ctx);
++            break;
+         default:
+             ret = -ENOTTY;
+             break;
+diff --git a/master/ioctl.h b/master/ioctl.h
+--- a/master/ioctl.h
++++ b/master/ioctl.h
+@@ -186,7 +186,10 @@
+ #define EC_IOCTL_EOE_DELIF            EC_IOWR(0x71, ec_ioctl_eoe_if_t)
+ #endif
+ 
+-#define EC_IOCTL_PCAP_DATA          EC_IOWR(0x72, ec_ioctl_pcap_data_t)
++#define EC_IOCTL_PCAP_DATA            EC_IOWR(0x72, ec_ioctl_pcap_data_t)
++
++// Mailbox Gateway
++#define EC_IOCTL_MBOX_GATEWAY         EC_IOWR(0x73, ec_ioctl_mbox_gateway_t)
+ 
+ /*****************************************************************************/
+ 
+@@ -879,6 +882,15 @@ typedef struct {
+ 
+ /*****************************************************************************/
+ 
++typedef struct {
++    // input / output
++    size_t data_size;
++    size_t buff_size;
++    uint8_t *data;
++} ec_ioctl_mbox_gateway_t;
++
++/*****************************************************************************/
++
+ #ifdef __KERNEL__
+ 
+ /** Context data structure for file handles.
+diff --git a/master/mailbox.h b/master/mailbox.h
+--- a/master/mailbox.h
++++ b/master/mailbox.h
+@@ -50,6 +50,7 @@
+  * These are used in the 'Type' field of the mailbox header.
+  */
+ enum {
++    EC_MBOX_TYPE_AOE = 0x01,
+     EC_MBOX_TYPE_EOE = 0x02,
+     EC_MBOX_TYPE_COE = 0x03,
+     EC_MBOX_TYPE_FOE = 0x04,
+@@ -59,6 +60,14 @@ enum {
+ 
+ /*****************************************************************************/
+ 
++/**
++   Mailbox error codes.
++*/
++
++extern const ec_code_msg_t mbox_error_messages[];
++  
++/*****************************************************************************/
++
+ uint8_t *ec_slave_mbox_prepare_send(const ec_slave_t *, ec_datagram_t *,
+                                     uint8_t, size_t);
+ int      ec_slave_mbox_prepare_check(const ec_slave_t *, ec_datagram_t *);
+diff --git a/master/master.c b/master/master.c
+--- a/master/master.c
++++ b/master/master.c
+@@ -1441,67 +1441,84 @@ void ec_master_receive_datagrams(
+                             if (slave->configured_tx_mailbox_offset != 0) {
+                                 if (datagram_offset_addr == slave->configured_tx_mailbox_offset) {
+                                     if (slave->valid_mbox_data) {
+-                                        datagram_mbox_prot = EC_READ_U8(cur_data + 5) & 0x0F;
+-                                        switch (datagram_mbox_prot) {
+-#ifdef EC_EOE
+-                                        case EC_MBOX_TYPE_EOE:
+-                                                // check EOE type and store in correct handlers mbox data cache
+-                                                eoe_type = EC_READ_U8(cur_data + 6) & 0x0F;
+-
+-                                                switch (eoe_type) {
+-                                              
+-                                                case EC_EOE_TYPE_FRAME_FRAG:
+-                                                    // EoE Frame Fragment handler
+-                                                    if ((slave->mbox_eoe_frag_data.data) && (data_size <= slave->mbox_eoe_frag_data.data_size)) {
+-                                                        memcpy(slave->mbox_eoe_frag_data.data, cur_data, data_size);
+-                                                        slave->mbox_eoe_frag_data.payload_size = data_size;
+-                                                    }
+-                                                    break;
+-                                                case EC_EOE_TYPE_INIT_RES:
+-                                                    // EoE Init / Set IP response handler
+-                                                    if ((slave->mbox_eoe_init_data.data) && (data_size <= slave->mbox_eoe_init_data.data_size)) {
+-                                                        memcpy(slave->mbox_eoe_init_data.data, cur_data, data_size);
+-                                                        slave->mbox_eoe_init_data.payload_size = data_size;
+-                                                    }
+-                                                    break;
+-                                                default:
+-                                                    EC_MASTER_DBG(master, 1, "Unhandled EoE protocol type from slave: %u Protocol: %u, Type: %x\n",
+-                                                            datagram_slave_addr, datagram_mbox_prot, eoe_type);
+-                                                    // copy instead received data into the datagram memory.
+-                                                    memcpy(datagram->data, cur_data, data_size);
+-                                                    break;
++                                        // check if the mailbox header slave address is the
++                                        // MBox Gateway addr offset above the slave position, and
++                                        // a valid MBox Gateway address
++                                        // Note: the datagram station address is the slave position + 1
++                                        // Note: the EL6614 EoE module does not fill in the MailBox Header
++                                        //   Address value in the EoE response.  Other modules / protocols
++                                        //   may do the same.
++                                        if (unlikely( 
++                                                (EC_READ_U16(cur_data + 2) == datagram_slave_addr + EC_MBG_SLAVE_ADDR_OFFSET - 1) &&
++                                                (EC_READ_U16(cur_data + 2) >= EC_MBG_SLAVE_ADDR_OFFSET) )) {
++                                            // EtherCAT Mailbox Gateway response
++                                            if ((slave->mbox_mbg_data.data) && (data_size <= slave->mbox_mbg_data.data_size)) {
++                                                memcpy(slave->mbox_mbg_data.data, cur_data, data_size);
++                                                slave->mbox_mbg_data.payload_size = data_size;
+                                             }
+-                                            break;
++                                        } else {
++                                            datagram_mbox_prot = EC_READ_U8(cur_data + 5) & 0x0F;
++                                            switch (datagram_mbox_prot) {
++#ifdef EC_EOE
++                                            case EC_MBOX_TYPE_EOE:
++                                                    // check EOE type and store in correct handlers mbox data cache
++                                                    eoe_type = EC_READ_U8(cur_data + 6) & 0x0F;
++
++                                                    switch (eoe_type) {
++                                              
++                                                    case EC_EOE_TYPE_FRAME_FRAG:
++                                                        // EoE Frame Fragment handler
++                                                        if ((slave->mbox_eoe_frag_data.data) && (data_size <= slave->mbox_eoe_frag_data.data_size)) {
++                                                            memcpy(slave->mbox_eoe_frag_data.data, cur_data, data_size);
++                                                            slave->mbox_eoe_frag_data.payload_size = data_size;
++                                                        }
++                                                        break;
++                                                    case EC_EOE_TYPE_INIT_RES:
++                                                        // EoE Init / Set IP response handler
++                                                        if ((slave->mbox_eoe_init_data.data) && (data_size <= slave->mbox_eoe_init_data.data_size)) {
++                                                            memcpy(slave->mbox_eoe_init_data.data, cur_data, data_size);
++                                                            slave->mbox_eoe_init_data.payload_size = data_size;
++                                                        }
++                                                        break;
++                                                    default:
++                                                        EC_MASTER_DBG(master, 1, "Unhandled EoE protocol type from slave: %u Protocol: %u, Type: %x\n",
++                                                                datagram_slave_addr, datagram_mbox_prot, eoe_type);
++                                                        // copy instead received data into the datagram memory.
++                                                        memcpy(datagram->data, cur_data, data_size);
++                                                        break;
++                                                }
++                                                break;
+ #endif
+-                                        case EC_MBOX_TYPE_COE:
+-                                            if ((slave->mbox_coe_data.data) && (data_size <= slave->mbox_coe_data.data_size)) {
+-                                                memcpy(slave->mbox_coe_data.data, cur_data, data_size);
+-                                                slave->mbox_coe_data.payload_size = data_size;
+-                                            }
+-                                            break;
+-                                        case EC_MBOX_TYPE_FOE:
+-                                            if ((slave->mbox_foe_data.data) && (data_size <= slave->mbox_foe_data.data_size)) {
+-                                                memcpy(slave->mbox_foe_data.data, cur_data, data_size);
+-                                                slave->mbox_foe_data.payload_size = data_size;
++                                            case EC_MBOX_TYPE_COE:
++                                                if ((slave->mbox_coe_data.data) && (data_size <= slave->mbox_coe_data.data_size)) {
++                                                    memcpy(slave->mbox_coe_data.data, cur_data, data_size);
++                                                    slave->mbox_coe_data.payload_size = data_size;
++                                                }
++                                                break;
++                                            case EC_MBOX_TYPE_FOE:
++                                                if ((slave->mbox_foe_data.data) && (data_size <= slave->mbox_foe_data.data_size)) {
++                                                    memcpy(slave->mbox_foe_data.data, cur_data, data_size);
++                                                    slave->mbox_foe_data.payload_size = data_size;
++                                                }
++                                                break;
++                                            case EC_MBOX_TYPE_SOE:
++                                                if ((slave->mbox_soe_data.data) && (data_size <= slave->mbox_soe_data.data_size)) {
++                                                    memcpy(slave->mbox_soe_data.data, cur_data, data_size);
++                                                    slave->mbox_soe_data.payload_size = data_size;
++                                                }
++                                                break;
++                                            case EC_MBOX_TYPE_VOE:
++                                                if ((slave->mbox_voe_data.data) && (data_size <= slave->mbox_voe_data.data_size)) {
++                                                    memcpy(slave->mbox_voe_data.data, cur_data, data_size);
++                                                    slave->mbox_voe_data.payload_size = data_size;
++                                                }
++                                                break;
++                                            default:
++                                                EC_MASTER_DBG(master, 1, "Unknown mailbox protocol from slave: %u Protocol: %u\n", datagram_slave_addr, datagram_mbox_prot);
++                                                // copy instead received data into the datagram memory.
++                                                memcpy(datagram->data, cur_data, data_size);
++                                                break;
+                                             }
+-                                            break;
+-                                        case EC_MBOX_TYPE_SOE:
+-                                            if ((slave->mbox_soe_data.data) && (data_size <= slave->mbox_soe_data.data_size)) {
+-                                                memcpy(slave->mbox_soe_data.data, cur_data, data_size);
+-                                                slave->mbox_soe_data.payload_size = data_size;
+-                                            }
+-                                            break;
+-                                        case EC_MBOX_TYPE_VOE:
+-                                            if ((slave->mbox_voe_data.data) && (data_size <= slave->mbox_voe_data.data_size)) {
+-                                                memcpy(slave->mbox_voe_data.data, cur_data, data_size);
+-                                                slave->mbox_voe_data.payload_size = data_size;
+-                                            }
+-                                            break;
+-                                        default:
+-                                            EC_MASTER_DBG(master, 1, "Unknown mailbox protocol from slave: %u Protocol: %u\n", datagram_slave_addr, datagram_mbox_prot);
+-                                            // copy instead received data into the datagram memory.
+-                                            memcpy(datagram->data, cur_data, data_size);
+-                                            break;
+                                         }
+                                     } else {
+                                         // copy instead received data into the datagram memory.
+@@ -4048,6 +4065,575 @@ int ecrt_master_eoe_delif(ec_master_t *m
+ 
+ /*****************************************************************************/
+ 
++int ec_master_obj_dict(ec_master_t *master, uint8_t *data, 
++        size_t *data_size, size_t buff_size)
++{
++    uint8_t     sdo_req_cmd;
++    uint8_t     sdo_resp_cmd;
++    uint16_t    sdo_index;
++    uint8_t     sdo_sub_index;
++    uint16_t    slave_posn;
++    ec_slave_t *slave;
++    char        value[32];
++    size_t      value_size;
++    size_t      total_value_size;
++    int         i;
++    uint8_t     link_status;
++    uint32_t    offset;
++    uint32_t    abort_code;
++    uint8_t     resp_error = 0;
++    
++  
++    EC_MASTER_DBG(master, 1, "MBox Gateway request for Master Information.\n");
++
++    // check the mailbox header type is CoE
++    if ( (*data_size < EC_MBOX_HEADER_SIZE) ||
++            ((EC_READ_U16(data + 5) & 0x0F) != EC_MBOX_TYPE_COE) ) {
++        EC_MASTER_ERR(master, "Master does not support requested mailbox type!\n");
++        return -EPROTONOSUPPORT;
++    }
++    
++    // ensure the CoE Header service is an SDO request
++    offset = EC_MBOX_HEADER_SIZE;
++    if ( (*data_size < EC_MBOX_HEADER_SIZE + EC_COE_HEADER_SIZE + 4) ||
++            (EC_READ_U16(data + offset) >> 12 != 0x2) ) {
++        EC_MASTER_ERR(master, "Master only supports SDO requests!\n");
++        return -EINVAL;
++    }
++  
++    // get the SDO cmd, index, subindex
++    offset = EC_MBOX_HEADER_SIZE + EC_COE_HEADER_SIZE;
++    sdo_req_cmd   = EC_READ_U8(data + offset) >> 5;
++    sdo_index     = EC_READ_U16(data + offset + 1);
++    sdo_sub_index = EC_READ_U8(data + offset + 3);
++    
++    // get the master lock
++    if (ec_lock_down_interruptible(&master->master_sem)) {
++        return -EINTR;
++    }
++    
++    // handle SDO request
++    // See ETG.5001.3 for required object dictionary entries to support
++    if ( (sdo_index >= 0x8000) && (sdo_index < 0x8000 + master->slave_count) ) {
++        // readonly commands
++        if (sdo_req_cmd != 0x02) {
++            ec_lock_up(&master->master_sem);
++            EC_MASTER_ERR(master, "Master, unsupported SDO Command %hhu on"
++                    " 0x%04X:%02X!\n", sdo_req_cmd, sdo_index, sdo_sub_index);
++            return -EPROTONOSUPPORT;
++        }
++        
++        // calc slave position (slaves start at position 0)
++        slave_posn = sdo_index - 0x8000;
++        
++        // get the slave information
++        if (!(slave = ec_master_find_slave(master, 0, slave_posn))) {
++            ec_lock_up(&master->master_sem);
++            EC_MASTER_ERR(master, "Slave %u does not exist!\n", slave_posn);
++            return -EINVAL;
++        }
++
++        switch (sdo_sub_index) {
++            case 0 : {
++                // length of this object (uint8)
++                // Note: this may need to be 35 (there is a gap between 8 and 33)
++                value_size = sizeof(uint8_t);
++                EC_WRITE_U8(value, 35);
++            } break;
++            case 1 : {
++                // slave index (uint16)
++                // slave posn + MBG slave address offset
++                value_size = sizeof(uint16_t);
++                EC_WRITE_U16(value, slave_posn + EC_MBG_SLAVE_ADDR_OFFSET);
++            } break;
++            case 2 : {
++                // slave type (visiblestring[16])
++                value_size = 16;
++                memset(value, 0x00, value_size);
++                if (slave->sii_image) {
++                    snprintf(value, value_size, "%s", slave->sii_image->sii.order);
++                }
++            } break;
++            case 3 : {
++                // slave name (visiblestring[32])
++                value_size = 32;
++                memset(value, 0x00, value_size);
++                if (slave->sii_image) {
++                    snprintf(value, value_size, "%s", slave->sii_image->sii.name);
++                }
++            } break;
++            case 4 : {
++                // device type (uint32) (Modular Device Profile)
++                // need ESI's for this information or a slave that can
++                // supports mailbox with SDO's (read 0x1000:00)
++                if (!(slave->sii_image) ||
++                    !(slave->sii_image->sii.mailbox_protocols & EC_MBOX_COE) ||
++                    (ecrt_master_sdo_upload(master, slave_posn, 0x1000, 0x00, 
++                        value, sizeof(uint32_t), &value_size, &abort_code) != 0)) {
++                    // return 0 by default
++                    value_size = sizeof(uint32_t);
++                    EC_WRITE_U32(value, 0x00000000);
++                }
++            } break;
++            case 5 : {
++                // vendor id (uint32)
++                value_size = sizeof(uint32_t);
++                EC_WRITE_U32(value, slave->config->vendor_id);
++            } break;
++            case 6 : {
++                // product code (uint32)
++                value_size = sizeof(uint32_t);
++                EC_WRITE_U32(value, slave->config->product_code);
++            } break;
++            case 7 : {
++                // revision number (uint32)
++                value_size = sizeof(uint32_t);
++                if (slave->sii_image) {
++                    EC_WRITE_U32(value, slave->sii_image->sii.revision_number);
++                } else {
++                    EC_WRITE_U32(value, 0x00000000);
++                }
++            } break;
++            case 8 : {
++                // serial number (uint32)
++                value_size = sizeof(uint32_t);
++                if (slave->sii_image) {
++                    EC_WRITE_U32(value, slave->sii_image->sii.serial_number);
++                } else {
++                    EC_WRITE_U32(value, 0x00000000);
++                }
++            } break;
++            case 9 ... 32 : {
++                // Data can not be read or stored
++                resp_error = 1;
++                value_size = sizeof(uint32_t);
++                EC_WRITE_U32(value, 0x08000020);
++            } break;
++            case 33 : {
++                // mailbox out size (uint16)
++                value_size = sizeof(uint16_t);
++                if (slave->sii_image) {
++                    EC_WRITE_U16(value, slave->sii_image->sii.std_rx_mailbox_size);
++                } else {
++                    EC_WRITE_U16(value, 0x0000);
++                }
++            } break;
++            case 34 : {
++                // mailbox in size (uint16)
++                value_size = sizeof(uint16_t);
++                if (slave->sii_image) {
++                    EC_WRITE_U16(value, slave->sii_image->sii.std_tx_mailbox_size);
++                } else {
++                    EC_WRITE_U16(value, 0x0000);
++                }
++            } break;
++            case 35 : {
++                // link status (uint8), bits 4..7 of register 0x0110:0x0111
++                link_status = 0;
++                for (i = 0; i < EC_MAX_PORTS; i++) {
++                    if (slave->ports[i].link.link_up) {
++                        link_status += 1 << (4 + i);
++                    }
++                }
++                value_size = sizeof(uint8_t);
++                EC_WRITE_U8(value, link_status);
++            } break;
++            default :
++            {
++                // Subindex does not exist error
++                resp_error = 1;
++                value_size = sizeof(uint32_t);
++                EC_WRITE_U32(value, 0x06090011);
++            } break;
++        }
++        
++    } else if ( (sdo_index >= 0xA000) && (sdo_index < 0xA000 + master->slave_count) ) {
++        // Note: this is meant to be optional, but the TwinSAFE_Loader.exe seems to 
++        //   want to have it
++        
++        // calc slave position (slaves start at position 0)
++        slave_posn = sdo_index - 0xA000;
++        
++        switch (sdo_sub_index) {
++            case 0 : {
++                // readonly command
++                if (sdo_req_cmd != 0x02) {
++                    ec_lock_up(&master->master_sem);
++                    EC_MASTER_ERR(master, "Master, unsupported SDO Command %hhu on"
++                            " 0x%04X:%02X!\n", sdo_req_cmd, sdo_index, sdo_sub_index);
++                    return -EPROTONOSUPPORT;
++                }
++                
++                // length of this object (uint8)
++                value_size = sizeof(uint8_t);
++                EC_WRITE_U8(value, 2);
++            } break;
++            case 1 : {
++                // AL Status, register 0x130-0x131 (uint16)
++                // current state
++                
++                // readonly command
++                if (sdo_req_cmd != 0x02) {
++                    ec_lock_up(&master->master_sem);
++                    EC_MASTER_ERR(master, "Master, unsupported SDO Command %hhu on"
++                            " 0x%04X:%02X!\n", sdo_req_cmd, sdo_index, sdo_sub_index);
++                    return -EPROTONOSUPPORT;
++                }
++                
++                // get the slave information
++                if (!(slave = ec_master_find_slave(master, 0, slave_posn))) {
++                    ec_lock_up(&master->master_sem);
++                    EC_MASTER_ERR(master, "Slave %u does not exist!\n", slave_posn);
++                    return -EINVAL;
++                }
++
++                // return the cached slaves current state
++                // Note: the master only stores the first state byte
++                //   whereas the AL Status register is two bytes
++                //   (second byte reserved)
++                value_size = sizeof(uint16_t);
++                EC_WRITE_U16(value, slave->current_state);
++            } break;
++            case 2 : {
++                // AL Control, register 0x120-0x121 (uint16)
++                // requested state
++
++                // readwrite command
++                if ( (sdo_req_cmd != 0x02) && (sdo_req_cmd != 0x00) ) {
++                    ec_lock_up(&master->master_sem);
++                    EC_MASTER_ERR(master, "Master, unsupported SDO Command %hhu on"
++                            " 0x%04X:%02X!\n", sdo_req_cmd, sdo_index, sdo_sub_index);
++                    return -EPROTONOSUPPORT;
++                }
++                
++                // get the slave information
++                if (!(slave = ec_master_find_slave(master, 0, slave_posn))) {
++                    ec_lock_up(&master->master_sem);
++                    EC_MASTER_ERR(master, "Slave %u does not exist!\n", slave_posn);
++                    return -EINVAL;
++                }
++                
++                if (sdo_req_cmd == 0x02) {
++                    // read
++                    // return the cached slaves requested state
++                    // Note: the master only stores the first state byte
++                    //   whereas the AL Control register is two bytes
++                    //   (second byte reserved)
++                    value_size = sizeof(uint16_t);
++                    EC_WRITE_U16(value, slave->requested_state);
++                    
++                } else {
++                    // write (sdo_req_cmd == 0x00)
++                    uint8_t *write_data = data + offset + 4;
++                    size_t   write_size;
++                    uint8_t  size_specified = EC_READ_U8(data + offset) & 0x01;
++                    if (size_specified) {
++                        write_size = 4 - ((EC_READ_U8(data + offset) & 0x0C) >> 2);
++                    } else {
++                        write_size = 4;
++                    }
++                    
++                    // check write size
++                    if (write_size != 2) {
++                        ec_lock_up(&master->master_sem);
++                        EC_MASTER_ERR(master, "Master, unexpected SDO write data size"
++                                " %zu (expected %u) on 0x%04X:%02X!\n", 
++                                write_size, 2, sdo_index, sdo_sub_index);
++                        return -EPROTONOSUPPORT;
++                    }
++
++                    // request the slave AL state
++                    ec_slave_request_state(slave, EC_READ_U16(write_data));
++                    
++                    // set blank download response
++                    value_size = sizeof(uint32_t);
++                    memset(value, 0x00, 4);
++                }
++            } break;
++            default : { 
++                // Subindex does not exist error
++                resp_error = 1;
++                value_size = sizeof(uint32_t);
++                EC_WRITE_U32(value, 0x06090011);
++            } break;
++        }
++
++    } else if ( (sdo_index >= 0xF020) && (sdo_index < 0xF030) ) {
++        // readonly commands
++        if (sdo_req_cmd != 0x02) {
++            ec_lock_up(&master->master_sem);
++            EC_MASTER_ERR(master, "Master, unsupported SDO Command %hhu on"
++                    " 0x%04X:%02X!\n", sdo_req_cmd, sdo_index, sdo_sub_index);
++            return -EPROTONOSUPPORT;
++        }
++        
++        if (sdo_sub_index == 0) {
++            uint64_t index = master->slave_count;
++            uint32_t remainder;
++          
++            // length of this object (uint8)
++            value_size = sizeof(uint8_t);
++            
++            // calc index and remainder from slave count
++            remainder = do_div(index, 255);
++            
++            if (sdo_index - 0xF020 < index) {
++                EC_WRITE_U8(value, 255);
++            } else if ( (sdo_index - 0xF020 == index) && (remainder > 0) ) {
++                EC_WRITE_U8(value, remainder);
++            } else {
++                EC_WRITE_U8(value, 0);
++            }
++        } else {
++            // calc slave position
++            slave_posn = ((sdo_index - 0xF020) << 8) + sdo_sub_index - (sdo_index - 0xF020 + 1);
++            
++            if (slave_posn < master->slave_count) {
++                // slave index (uint16)
++                // slave posn + MBG slave address offset
++                value_size = sizeof(uint16_t);
++                EC_WRITE_U16(value, slave_posn + EC_MBG_SLAVE_ADDR_OFFSET);
++            } else {
++                // Object Not Found error
++                resp_error = 1;
++                value_size = sizeof(uint32_t);
++                EC_WRITE_U32(value, 0x06020000);
++            }
++        }
++                
++    } else if (sdo_index == 0xF000) {
++        // readonly commands
++        if (sdo_req_cmd != 0x02) {
++            ec_lock_up(&master->master_sem);
++            EC_MASTER_ERR(master, "Master, unsupported SDO Command %hhu on"
++                    " 0x%04X:%02X!\n", sdo_req_cmd, sdo_index, sdo_sub_index);
++            return -EPROTONOSUPPORT;
++        }
++        
++        // Modular Device Profile
++        switch (sdo_sub_index) {
++            case 0 : {
++                // length of this object (uint8)
++                value_size = sizeof(uint8_t);
++                EC_WRITE_U8(value, 4);
++            } break;
++            case 1 : {
++                // module index distance (uint16)
++                value_size = sizeof(uint16_t);
++                EC_WRITE_U16(value, 0x0001);
++            } break;
++            case 2 : {
++                // maximum number of modules (uint16)
++                // Gateway information limit
++                value_size = sizeof(uint16_t);
++                EC_WRITE_U16(value, 4080);
++            } break;
++            case 3 : {
++                // general configuration (uint32)
++                value_size = sizeof(uint32_t);
++                EC_WRITE_U32(value, 0x000000FF);
++            } break;
++            case 4 : {
++                // general information (uint32)
++                value_size = sizeof(uint32_t);
++                EC_WRITE_U32(value, 0x00000000);
++            } break;
++            default : { 
++                // Subindex does not exist error
++                resp_error = 1;
++                value_size = sizeof(uint32_t);
++                EC_WRITE_U32(value, 0x06090011);
++            } break;
++        }
++
++    } else {
++        // Object Not Found error
++        resp_error = 1;
++        value_size = sizeof(uint32_t);
++        EC_WRITE_U32(value, 0x06020000);
++    }
++    
++    ec_lock_up(&master->master_sem);
++    
++    
++    // do we need to allow room for a complete size field?
++    if ( (value_size > 0) && (value_size <= 4) ) {
++        total_value_size = value_size;
++    } else {
++        total_value_size = value_size + sizeof(uint32_t);
++    }
++
++    // set reply
++    if (EC_MBOX_HEADER_SIZE + EC_COE_HEADER_SIZE + 4 + total_value_size > buff_size) {
++        EC_MASTER_ERR(master, "Buffer too small.\n");
++        return -EOVERFLOW;
++    }
++    else {
++        // update data_size
++        *data_size = EC_MBOX_HEADER_SIZE + EC_COE_HEADER_SIZE + 4 + total_value_size;
++      
++        // update Mailbox Header Length (length of CoE Header onwards)
++        EC_WRITE_U16(data, *data_size - EC_MBOX_HEADER_SIZE);
++        
++        // update CoE service response or SDO command specifier on error
++        if (resp_error) {
++            // not happy, return abort SDO transfer request
++            offset = EC_MBOX_HEADER_SIZE + EC_COE_HEADER_SIZE;
++            EC_WRITE_U8(data + offset, 0x04 << 5);
++
++            // set abort value
++            memcpy(data + offset + 4, value, value_size);
++        } else {
++            // happy, return service code 3 (SDO response)
++            offset = EC_MBOX_HEADER_SIZE;
++            EC_WRITE_U16(data + offset, 0x03 << 12);
++            
++            // set SDO command specifier
++            if (sdo_req_cmd == 0x02) {
++                // upload response
++                sdo_resp_cmd = 0x02;
++            } else {
++                // download response
++                sdo_resp_cmd = 0x01;
++            }
++            
++            // set value size
++            offset = EC_MBOX_HEADER_SIZE + EC_COE_HEADER_SIZE;
++            if ( (value_size > 0) && (value_size <= 4) ) {
++                // upload response, expedited size specified
++                // bit 0      1 = size specified
++                // bit 1      1 = expedited
++                // bit 2..3   4 - size
++                // bit 5..7   command specifier
++                EC_WRITE_U8(data + offset, (sdo_resp_cmd << 5) + 
++                        ((4 - value_size) << 2) + 0x02 + 0x01);
++                
++                // set offset to data
++                offset += 4;
++            } else {
++                // upload response, size specified
++                EC_WRITE_U8(data + offset, (sdo_resp_cmd << 5) + 0x01);
++                
++                // set value size
++                offset += 4;
++                EC_WRITE_U32(data + offset, value_size);
++                
++                // set offset to value
++                offset += sizeof(uint32_t);
++            }
++            
++            // set value
++            memcpy(data + offset, value, value_size);
++        }
++    }
++    
++    
++    return 0;
++}
++
++/*****************************************************************************/
++
++int ec_master_mbox_gateway(ec_master_t *master, uint8_t *data, 
++        size_t *data_size, size_t buff_size)
++{
++    ec_mbg_request_t request;
++    uint16_t slave_posn;
++    ec_slave_t *slave;
++    int ret = 0;
++
++    // get the slave address
++    slave_posn = EC_READ_U16(data + 2);
++
++    // check if slave address is zero (master object dictionary request)
++    if (slave_posn == 0)
++    {
++        // request for master information
++        ret = ec_master_obj_dict(master, data, data_size, buff_size);
++    }
++    else if (slave_posn >= EC_MBG_SLAVE_ADDR_OFFSET)
++    {
++        // calculate the slave position address
++        slave_posn -= EC_MBG_SLAVE_ADDR_OFFSET;
++      
++        // pass on request to slave
++        ec_mbg_request_init(&request);
++        ret = ec_mbg_request_copy_data(&request, data, *data_size);
++        *data_size = 0;
++        if (ret) {
++            ec_mbg_request_clear(&request);
++            return ret;
++        }
++        ec_mbg_request_run(&request);
++
++        if (ec_lock_down_interruptible(&master->master_sem)) {
++            ec_mbg_request_clear(&request);
++            return -EINTR;
++        }
++        
++        // check for a valid slave request
++        if (!(slave = ec_master_find_slave(master, 0, slave_posn))) {
++            ec_lock_up(&master->master_sem);
++            ec_mbg_request_clear(&request);
++            EC_MASTER_ERR(master, "Slave %u does not exist!\n", slave_posn);
++            return -EINVAL;
++        }
++
++        EC_SLAVE_DBG(slave, 1, "Scheduling MBox Gateway request.\n");
++
++        // schedule request.
++        list_add_tail(&request.list, &slave->mbg_requests);
++
++        ec_lock_up(&master->master_sem);
++
++        // wait for processing through FSM
++        if (wait_event_interruptible(master->request_queue,
++                    request.state != EC_INT_REQUEST_QUEUED)) {
++            // interrupted by signal
++            ec_lock_down(&master->master_sem);
++            if (request.state == EC_INT_REQUEST_QUEUED) {
++                list_del(&request.list);
++                ec_lock_up(&master->master_sem);
++                ec_mbg_request_clear(&request);
++                return -EINTR;
++            }
++            // request already processing: interrupt not possible.
++            ec_lock_up(&master->master_sem);
++        }
++
++        // wait until master FSM has finished processing
++        wait_event(master->request_queue, request.state != EC_INT_REQUEST_BUSY);
++
++        if (request.state != EC_INT_REQUEST_SUCCESS) {
++            if (request.error_code) {
++                ret = -request.error_code;
++            } else {
++                ret = -EIO;
++            }
++        } else {
++            if (request.data_size > buff_size) {
++                EC_MASTER_ERR(master, "Buffer too small.\n");
++                ret = -EOVERFLOW;
++            }
++            else {
++                memcpy(data, request.data, request.data_size);
++                *data_size = request.data_size;
++                ret = 0;
++            }
++        }
++
++        ec_mbg_request_clear(&request);
++    } else {
++        EC_MASTER_ERR(master, "MBox Gateway: Invalid slave offset address %u!\n", slave_posn);
++        return -EINVAL;
++    }
++      
++    
++    
++    return ret;
++}
++
++/*****************************************************************************/
++
+ void ecrt_master_reset(ec_master_t *master)
+ {
+     ec_slave_config_t *sc;
+diff --git a/master/master.h b/master/master.h
+--- a/master/master.h
++++ b/master/master.h
+@@ -412,6 +412,9 @@ int ec_master_eoe_process(ec_master_t *)
+ #endif
+ #endif
+ 
++int ec_master_mbox_gateway(ec_master_t *master, uint8_t *data, 
++        size_t *data_size, size_t buff_size);
++
+ int ec_master_debug_level(ec_master_t *, unsigned int);
+ 
+ ec_domain_t *ecrt_master_create_domain_err(ec_master_t *);
+diff --git a/master/mbox_gateway_request.c b/master/mbox_gateway_request.c
+new file mode 100644
+--- /dev/null
++++ b/master/mbox_gateway_request.c
+@@ -0,0 +1,162 @@
++/******************************************************************************
++ *
++ *  $Id$
++ *
++ *  Copyright (C) 2019  Florian Pose, Ingenieurgemeinschaft IgH
++ *
++ *  This file is part of the IgH EtherCAT Master.
++ *
++ *  The IgH EtherCAT Master is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License version 2, as
++ *  published by the Free Software Foundation.
++ *
++ *  The IgH EtherCAT Master is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
++ *  Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License along
++ *  with the IgH EtherCAT Master; if not, write to the Free Software
++ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ *  ---
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ *****************************************************************************/
++
++/** \file
++ * EtherCAT Mailbox Gateway request functions.
++ */
++
++/*****************************************************************************/
++
++#include <linux/module.h>
++#include <linux/jiffies.h>
++#include <linux/slab.h>
++
++#include "mbox_gateway_request.h"
++
++/*****************************************************************************/
++
++/** Default timeout in ms to wait for Mbox Gateway responses.
++ */
++#define EC_MBG_REQUEST_RESPONSE_TIMEOUT 1000
++
++/*****************************************************************************/
++
++void ec_mbg_request_clear_data(ec_mbg_request_t *);
++
++/*****************************************************************************/
++
++/** Mbox Gateway request constructor.
++ */
++void ec_mbg_request_init(
++        ec_mbg_request_t *req /**< Mbox Gateway request. */
++        )
++{
++    INIT_LIST_HEAD(&req->list);
++    req->data = NULL;
++    req->mem_size = 0;
++    req->data_size = 0;
++    req->response_timeout = EC_MBG_REQUEST_RESPONSE_TIMEOUT;
++    req->state = EC_INT_REQUEST_INIT;
++    req->jiffies_sent = 0U;
++    req->error_code = 0x0000;
++}
++
++/*****************************************************************************/
++
++/** Mbox Gateway request destructor.
++ */
++void ec_mbg_request_clear(
++        ec_mbg_request_t *req /**< Mbox Gateway request. */
++        )
++{
++    ec_mbg_request_clear_data(req);
++}
++
++/*****************************************************************************/
++
++/** Free allocated memory.
++ */
++void ec_mbg_request_clear_data(
++        ec_mbg_request_t *req /**< Mbox Gateway request. */
++        )
++{
++    if (req->data) {
++        kfree(req->data);
++        req->data = NULL;
++    }
++
++    req->mem_size = 0;
++    req->data_size = 0;
++}
++
++/*****************************************************************************/
++
++/** Pre-allocates the data memory.
++ *
++ * If the \a mem_size is already bigger than \a size, nothing is done.
++ *
++ * \return 0 on success, otherwise -ENOMEM.
++ */
++int ec_mbg_request_alloc(
++        ec_mbg_request_t *req, /**< Mbox Gateway request. */
++        size_t size /**< Data size to allocate. */
++        )
++{
++    if (size <= req->mem_size)
++        return 0;
++
++    ec_mbg_request_clear_data(req);
++
++    if (!(req->data = (uint8_t *) kmalloc(size, GFP_KERNEL))) {
++        EC_ERR("Failed to allocate %zu bytes of Mbox Gateway memory.\n", size);
++        return -ENOMEM;
++    }
++
++    req->mem_size = size;
++    req->data_size = 0;
++    return 0;
++}
++
++/*****************************************************************************/
++
++/** Copies Mbox Gateway data from an external source.
++ *
++ * If the \a mem_size is to small, new memory is allocated.
++ *
++ * \retval  0 Success.
++ * \retval <0 Error code.
++ */
++int ec_mbg_request_copy_data(
++        ec_mbg_request_t *req, /**< Mbox Gateway request. */
++        const uint8_t *source, /**< Source data. */
++        size_t size /**< Number of bytes in \a source. */
++        )
++{
++    int ret = ec_mbg_request_alloc(req, size);
++    if (ret < 0)
++        return ret;
++
++    memcpy(req->data, source, size);
++    req->data_size = size;
++    return 0;
++}
++
++/*****************************************************************************/
++
++/** Request to run.
++ */
++void ec_mbg_request_run(
++        ec_mbg_request_t *req /**< Mbox Gateway request. */
++       )
++{
++    req->state = EC_INT_REQUEST_QUEUED;
++    req->error_code = 0x0000;
++}
++
++/*****************************************************************************/
+diff --git a/master/mbox_gateway_request.h b/master/mbox_gateway_request.h
+new file mode 100644
+--- /dev/null
++++ b/master/mbox_gateway_request.h
+@@ -0,0 +1,73 @@
++/******************************************************************************
++ *
++ *  $Id$
++ *
++ *  Copyright (C) 2019  Florian Pose, Ingenieurgemeinschaft IgH
++ *
++ *  This file is part of the IgH EtherCAT Master.
++ *
++ *  The IgH EtherCAT Master is free software; you can redistribute it and/or
++ *  modify it under the terms of the GNU General Public License version 2, as
++ *  published by the Free Software Foundation.
++ *
++ *  The IgH EtherCAT Master is distributed in the hope that it will be useful,
++ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
++ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General
++ *  Public License for more details.
++ *
++ *  You should have received a copy of the GNU General Public License along
++ *  with the IgH EtherCAT Master; if not, write to the Free Software
++ *  Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
++ *
++ *  ---
++ *
++ *  The license mentioned above concerns the source code only. Using the
++ *  EtherCAT technology and brand is only permitted in compliance with the
++ *  industrial property and similar rights of Beckhoff Automation GmbH.
++ *
++ *****************************************************************************/
++
++/**
++   \file
++   EtherCAT Mailbox Gateway request structure.
++*/
++
++/*****************************************************************************/
++
++#ifndef __EC_MBG_REQUEST_H__
++#define __EC_MBG_REQUEST_H__
++
++#include <linux/list.h>
++
++#include "globals.h"
++
++/*****************************************************************************/
++
++/** EtherCAT Mailbox Gateway request.
++ */
++typedef struct {
++    struct list_head list; /**< List item. */
++    uint8_t *data; /**< Pointer to MBox request data. */
++    size_t mem_size; /**< Size of MBox request data memory. */
++    size_t data_size; /**< Size of MBox request data. */
++    uint32_t response_timeout; /**< Maximum time in ms, the transfer is
++                                 retried, if the slave does not respond. */
++    ec_internal_request_state_t state; /**< Request state. */
++    unsigned long jiffies_sent; /**< Jiffies, when the upload/download
++                                     request was sent. */
++    uint16_t error_code; /**< MBox Gateway error code. */
++    uint8_t mbox_type; /**< Cached MBox type */
++} ec_mbg_request_t;
++
++/*****************************************************************************/
++
++void ec_mbg_request_init(ec_mbg_request_t *);
++void ec_mbg_request_clear(ec_mbg_request_t *);
++
++int ec_mbg_request_alloc(ec_mbg_request_t *, size_t);
++int ec_mbg_request_copy_data(ec_mbg_request_t *, const uint8_t *, size_t);
++void ec_mbg_request_run(ec_mbg_request_t *);
++
++/*****************************************************************************/
++
++#endif
+diff --git a/master/slave.c b/master/slave.c
+--- a/master/slave.c
++++ b/master/slave.c
+@@ -140,6 +140,7 @@ void ec_slave_init(
+     INIT_LIST_HEAD(&slave->foe_requests);
+     INIT_LIST_HEAD(&slave->soe_requests);
+     INIT_LIST_HEAD(&slave->eoe_requests);
++    INIT_LIST_HEAD(&slave->mbg_requests);
+     INIT_LIST_HEAD(&slave->dict_requests);
+ 
+     // create state machine object
+@@ -156,6 +157,7 @@ void ec_slave_init(
+     ec_mbox_data_init(&slave->mbox_foe_data);
+     ec_mbox_data_init(&slave->mbox_soe_data);
+     ec_mbox_data_init(&slave->mbox_voe_data);
++    ec_mbox_data_init(&slave->mbox_mbg_data);
+ 
+     slave->valid_mbox_data = 0;
+ }
+@@ -296,6 +298,15 @@ void ec_slave_clear(ec_slave_t *slave /*
+         request->state = EC_INT_REQUEST_FAILURE;
+     }
+ 
++    while (!list_empty(&slave->mbg_requests)) {
++        ec_mbg_request_t *request =
++            list_entry(slave->mbg_requests.next, ec_mbg_request_t, list);
++        list_del_init(&request->list); // dequeue
++        EC_SLAVE_WARN(slave, "Discarding MBox Gateway request,"
++                " slave about to be deleted.\n");
++        request->state = EC_INT_REQUEST_FAILURE;
++    }
++
+     while (!list_empty(&slave->dict_requests)) {
+         ec_dict_request_t *request =
+             list_entry(slave->dict_requests.next, ec_dict_request_t, list);
+@@ -332,6 +343,7 @@ void ec_slave_clear(ec_slave_t *slave /*
+     ec_mbox_data_clear(&slave->mbox_foe_data);
+     ec_mbox_data_clear(&slave->mbox_soe_data);
+     ec_mbox_data_clear(&slave->mbox_voe_data);
++    ec_mbox_data_clear(&slave->mbox_mbg_data);
+ 
+     ec_fsm_slave_clear(&slave->fsm);
+ }
+diff --git a/master/slave.h b/master/slave.h
+--- a/master/slave.h
++++ b/master/slave.h
+@@ -276,6 +276,7 @@ struct ec_slave
+     struct list_head foe_requests; /**< FoE requests. */
+     struct list_head soe_requests; /**< SoE requests. */
+     struct list_head eoe_requests; /**< EoE set IP parameter requests. */
++    struct list_head mbg_requests; /**< EoE set IP parameter requests. */
+     struct list_head dict_requests; /**< Dictionary read requests. */
+ 
+     ec_fsm_slave_t fsm; /**< Slave state machine. */
+@@ -291,6 +292,7 @@ struct ec_slave
+     ec_mbox_data_t mbox_foe_data; /**< Received mailbox data for FoE. */
+     ec_mbox_data_t mbox_soe_data; /**< Received mailbox data for SoE. */
+     ec_mbox_data_t mbox_voe_data; /**< Received mailbox data for VoE. */
++    ec_mbox_data_t mbox_mbg_data; /**< Received mailbox data for MBox Gateway. */
+ 
+     uint8_t valid_mbox_data; /**< Received mailbox data is valid. */
+ };

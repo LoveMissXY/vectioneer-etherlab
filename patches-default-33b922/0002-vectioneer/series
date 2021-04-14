@@ -1,0 +1,12 @@
+base/0001-increased-datagram-timeout-which-is-necessary-for-so.patch
+base/0002-async-SOE-requests-kernel-part.patch
+base/0003-async-SOE-requests-library-part.patch
+base/0004-async-SOE-requests-an-example.patch
+base/0005-async-SOE-requests-add-write-example.patch
+base/0006-async-SOE-requests-add-ecrt_soe_request_index-method.patch
+base/0007-async-SOE-requests-fix-typo-in-ecrt_slave_config_cre.patch
+base/0008-async-SOE-request-add-workaround-for-crash-when-deac.patch
+base/0009-mailbox-gateway-fix-from-updated-Graeme-Foot-patch.patch
+base/0010-Fix-memory-leak-in-igb-driver-for-kernel-4.14-and-4.patch
+base/0011-Added-5.4-kernel-drivers.patch
+base/0012-gettimeofday-wrapper-for-kernel-5.x.patch

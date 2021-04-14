@@ -1,0 +1,25 @@
+From 0fbabba359b5844672cfbeb5fb2df5873ec2877e Mon Sep 17 00:00:00 2001
+From: Sebastien Blanchet <blanchet@iram.fr>
+Date: Sat, 3 Apr 2021 22:31:48 +0200
+Subject: [PATCH 13/24] doc: fix typographic error
+
+---
+ documentation/ethercat_doc.tex | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/documentation/ethercat_doc.tex b/documentation/ethercat_doc.tex
+index 8b111f02..54d74406 100644
+--- a/documentation/ethercat_doc.tex
++++ b/documentation/ethercat_doc.tex
+@@ -3287,7 +3287,7 @@ $ `\textbf{make doc}`
+ 
+ The interface documentation can be viewed by pointing a browser to the file
+ \textit{doxygen-output/html/index.html}. The functions and data structures of
+-the application interface a covered by an own module ``Application
++the application interface are covered by an own module ``Application
+ Interface''.
+ 
+ \section{Installing the Software}
+-- 
+2.25.1
+

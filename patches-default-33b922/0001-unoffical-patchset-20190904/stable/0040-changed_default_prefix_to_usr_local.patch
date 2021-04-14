@@ -1,0 +1,18 @@
+# HG changeset patch
+# User Florian Pose <fp@igh.de>
+# Date 1546424796 -3600
+#      Wed Jan 02 11:26:36 2019 +0100
+Changed default prefix to /usr/local.
+(grafted from 17edbcf2b0c1df14a7e978edbbaa1594d32f5980)
+
+diff --git a/configure.ac b/configure.ac
+--- a/configure.ac
++++ b/configure.ac
+@@ -42,7 +42,6 @@ AC_PREREQ(2.59)
+ AC_INIT([ethercat],[1.5.2],[fp@igh-essen.com])
+ AC_CONFIG_AUX_DIR([autoconf])
+ AM_INIT_AUTOMAKE([-Wall -Werror dist-bzip2 subdir-objects])
+-AC_PREFIX_DEFAULT([/opt/etherlab])
+ AC_CONFIG_HEADERS([config.h])
+ AC_CONFIG_SRCDIR([config.h.in])
+ AC_CONFIG_MACRO_DIR([m4])

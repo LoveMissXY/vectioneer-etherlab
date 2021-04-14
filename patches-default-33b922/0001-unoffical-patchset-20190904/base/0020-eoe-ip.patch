@@ -1,0 +1,398 @@
+From: Graeme Foot <graeme.foot@touchcut.com>
+Date: Wed, 07 Feb 2019 10:04:51 +1200
+
+EoE IP command patch
+
+The EoE IP command runs a state machine parallel to the EoE frame processing
+state machine.  But both state machines use the EoE mailbox data cache and
+would error out and dump the others mailbox responses.
+
+This change splits the EoE mailbox response types into one data cache per
+handler.
+
+Also, the IP command data has been changed to fixed data positions
+to make it compatible with the ETG.1000.6 standard.
+
+diff --git a/master/datagram.c b/master/datagram.c
+--- a/master/datagram.c
++++ b/master/datagram.c
+@@ -723,9 +723,11 @@ void ec_mbox_prot_data_prealloc(
+     if ((size > 0) && (size <= EC_MAX_DATA_SIZE)) {
+ #ifdef EC_EOE
+         if (protocols & EC_MBOX_EOE) {
+-            ec_mbox_data_prealloc(&slave->mbox_eoe_data, size);
++            ec_mbox_data_prealloc(&slave->mbox_eoe_frag_data, size);
++            ec_mbox_data_prealloc(&slave->mbox_eoe_init_data, size);
+         } else {
+-            ec_mbox_data_clear(&slave->mbox_eoe_data);
++            ec_mbox_data_clear(&slave->mbox_eoe_frag_data);
++            ec_mbox_data_clear(&slave->mbox_eoe_init_data);
+         }
+ #endif
+         if (protocols & EC_MBOX_COE) {
+diff --git a/master/ethernet.c b/master/ethernet.c
+--- a/master/ethernet.c
++++ b/master/ethernet.c
+@@ -396,7 +396,7 @@ int ec_eoe_send(ec_eoe_t *eoe /**< EoE h
+         return PTR_ERR(data);
+     }
+ 
+-    EC_WRITE_U8 (data, EC_EOE_FRAMETYPE_INIT_REQ); // Initiate EoE Request
++    EC_WRITE_U8 (data, EC_EOE_TYPE_FRAME_FRAG); // Initiate EoE Tx Request
+     EC_WRITE_U8 (data + 1, last_fragment);
+     EC_WRITE_U16(data + 2, ((eoe->tx_fragment_number & 0x3F) |
+                             (complete_offset & 0x3F) << 6 |
+@@ -529,7 +529,7 @@ void ec_eoe_state_rx_check(ec_eoe_t *eoe
+         eoe->rx_idle = 1;
+         ec_read_mbox_lock_clear(eoe->slave);
+         // check that data is not already received by another read request
+-        if (eoe->slave->mbox_eoe_data.payload_size > 0) {
++        if (eoe->slave->mbox_eoe_frag_data.payload_size > 0) {
+             eoe->state = ec_eoe_state_rx_fetch_data;
+             eoe->state(eoe);
+         } else {
+@@ -580,7 +580,7 @@ void ec_eoe_state_rx_fetch(ec_eoe_t *eoe
+ void ec_eoe_state_rx_fetch_data(ec_eoe_t *eoe /**< EoE handler */)
+ {
+     size_t rec_size, data_size;
+-    uint8_t *data, frame_type, last_fragment, time_appended, mbox_prot;
++    uint8_t *data, eoe_type, last_fragment, time_appended, mbox_prot;
+     uint8_t fragment_offset, fragment_number;
+ #if EOE_DEBUG_LEVEL >= 2
+     uint8_t frame_number;
+@@ -590,8 +590,8 @@ void ec_eoe_state_rx_fetch_data(ec_eoe_t
+     unsigned int i;
+ #endif
+ 
+-    if (eoe->slave->mbox_eoe_data.payload_size > 0) {
+-        eoe->slave->mbox_eoe_data.payload_size = 0;
++    if (eoe->slave->mbox_eoe_frag_data.payload_size > 0) {
++        eoe->slave->mbox_eoe_frag_data.payload_size = 0;
+     } else {
+         // initiate a new mailbox read check if required data is not available
+         if (!ec_read_mbox_locked(eoe->slave)) {
+@@ -602,7 +602,7 @@ void ec_eoe_state_rx_fetch_data(ec_eoe_t
+         return;
+     }
+ 
+-    data = ec_slave_mbox_fetch(eoe->slave, &eoe->slave->mbox_eoe_data,
++    data = ec_slave_mbox_fetch(eoe->slave, &eoe->slave->mbox_eoe_frag_data,
+             &mbox_prot, &rec_size);
+     if (IS_ERR(data)) {
+         eoe->stats.rx_errors++;
+@@ -624,13 +624,11 @@ void ec_eoe_state_rx_fetch_data(ec_eoe_t
+         return;
+     }
+ 
+-    frame_type = EC_READ_U16(data) & 0x000F;
++    eoe_type = EC_READ_U8(data) & 0x0F;
+ 
+-    if (frame_type != EC_EOE_FRAMETYPE_INIT_REQ) { // EoE Fragment Data
+-#if EOE_DEBUG_LEVEL >= 1
+-        EC_SLAVE_WARN(eoe->slave, "%s: Other frame received."
+-                " Dropping.\n", eoe->dev->name);
+-#endif
++    if (eoe_type != EC_EOE_TYPE_FRAME_FRAG) {
++        EC_SLAVE_ERR(eoe->slave, "%s: EoE iface handler received other EoE type"
++                " response (type %x). Dropping.\n", eoe->dev->name, eoe_type);
+         eoe->stats.rx_dropped++;
+         eoe->state = ec_eoe_state_tx_start;
+         return;
+diff --git a/master/ethernet.h b/master/ethernet.h
+--- a/master/ethernet.h
++++ b/master/ethernet.h
+@@ -50,11 +50,12 @@
+ /** EoE frame types.
+  */
+ enum {
+-    EC_EOE_FRAMETYPE_INIT_REQ =   0x00, /** Initiate EoE Request. */
+-    EC_EOE_FRAMETYPE_SET_IP_REQ = 0x02, /** Set IP Parameter Request. */
+-    EC_EOE_FRAMETYPE_SET_IP_RES = 0x03, /** Set IP Parameter Response. */
+-    EC_EOE_FRAMETYPE_FILT_REQ =   0x04, /** Set Address Filter Request. */
+-    EC_EOE_FRAMETYPE_FILT_RES =   0x05, /** Set Address Filter Response. */
++    EC_EOE_TYPE_FRAME_FRAG =      0x00, /** EoE Frame Fragment Tx & Rx. */
++    EC_EOE_TYPE_TIMESTAMP_RES =   0x01, /** EoE Timestamp Response. */
++    EC_EOE_TYPE_INIT_REQ =        0x02, /** EoE Init, Set IP Parameter Request. */
++    EC_EOE_TYPE_INIT_RES =        0x03, /** EoE Init, Set IP Parameter Response. */
++    EC_EOE_TYPE_MACFILTER_REQ =   0x04, /** EoE Set MAC Address Filter Request. */
++    EC_EOE_TYPE_MACFILTER_RES =   0x05, /** EoE Set MAC Address Filter Response. */
+ };
+ 
+ /*****************************************************************************/
+diff --git a/master/fsm_eoe.c b/master/fsm_eoe.c
+--- a/master/fsm_eoe.c
++++ b/master/fsm_eoe.c
+@@ -160,41 +160,34 @@ int ec_fsm_eoe_prepare_set(
+     ec_slave_t *slave = fsm->slave;
+     ec_master_t *master = slave->master;
+     ec_eoe_request_t *req = fsm->request;
+-    size_t size = 8;
+-
+-    if (req->mac_address_included) {
+-        size += ETH_ALEN;
+-    }
+-
+-    if (req->ip_address_included) {
+-        size += 4;
+-    }
+-
+-    if (req->subnet_mask_included) {
+-        size += 4;
+-    }
+-
+-    if (req->gateway_included) {
+-        size += 4;
+-    }
+-
+-    if (req->dns_included) {
+-        size += 4;
+-    }
+-
+-    if (req->name_included) {
+-        size += EC_MAX_HOSTNAME_SIZE;
+-    }
++    
++    // Note: based on wireshark packet filter it suggests that the EOE_INIT
++    //   information is a fixed size with fixed information positions.
++    //   see: packet-ecatmb.h and packet-ecatmb.c
++    //   However, TwinCAT 2.1 testing also indicates that if a piece of
++    //   information is missing then all subsequent items are ignored
++    //   Also, if you want DHCP, then only set the mac address.
++    size_t size = 8 +                       // header + flags
++                  ETH_ALEN +                // mac address
++                  4 +                       // ip address
++                  4 +                       // subnet mask
++                  4 +                       // gateway
++                  4 +                       // dns server
++                  EC_MAX_HOSTNAME_SIZE;     // dns name
+ 
+     data = ec_slave_mbox_prepare_send(slave, datagram, EC_MBOX_TYPE_EOE,
+             size);
+     if (IS_ERR(data)) {
+         return PTR_ERR(data);
+     }
++    
++    // zero data
++    memset(data, 0, size);
+ 
+-    EC_WRITE_U8(data, EC_EOE_FRAMETYPE_SET_IP_REQ); // Set IP parameter req.
+-    EC_WRITE_U8(data + 1, 0x01); // last fragment, no timestamps
+-    EC_WRITE_U16(data + 2, 0x0000); // fragment no., offset, frame no.
++    // header
++    EC_WRITE_U8(data, EC_EOE_TYPE_INIT_REQ); // Set IP parameter req.
++    EC_WRITE_U8(data + 1, 0x00);             // not used
++    EC_WRITE_U16(data + 2, 0x0000);          // not used
+ 
+     EC_WRITE_U32(data + 4,
+             ((req->mac_address_included != 0) << 0) |
+@@ -209,38 +202,38 @@ int ec_fsm_eoe_prepare_set(
+ 
+     if (req->mac_address_included) {
+         memcpy(cur, req->mac_address, ETH_ALEN);
+-        cur += ETH_ALEN;
+     }
++    cur += ETH_ALEN;
+ 
+     if (req->ip_address_included) {
+         uint32_t swapped = htonl(req->ip_address);
+         memcpy(cur, &swapped, 4);
+-        cur += 4;
+     }
++    cur += 4;
+ 
+     if (req->subnet_mask_included) {
+         uint32_t swapped = htonl(req->subnet_mask);
+         memcpy(cur, &swapped, 4);
+-        cur += 4;
+     }
++    cur += 4;
+ 
+     if (req->gateway_included) {
+         uint32_t swapped = htonl(req->gateway);
+         memcpy(cur, &swapped, 4);
+-        cur += 4;
+     }
++    cur += 4;
+ 
+     if (req->dns_included) {
+         uint32_t swapped = htonl(req->dns);
+         memcpy(cur, &swapped, 4);
+-        cur += 4;
+     }
++    cur += 4;
+ 
+     if (req->name_included) {
+         memcpy(cur, req->name, EC_MAX_HOSTNAME_SIZE);
+-        cur += EC_MAX_HOSTNAME_SIZE;
+     }
+-
++    cur += EC_MAX_HOSTNAME_SIZE;
++    
+     if (master->debug_level) {
+         EC_SLAVE_DBG(slave, 0, "Set IP parameter request:\n");
+         ec_print_data(data, cur - data);
+@@ -376,7 +369,7 @@ void ec_fsm_eoe_set_ip_check(
+         unsigned long diff_ms;
+ 
+         // check that data is not already received by another read request
+-        if (slave->mbox_eoe_data.payload_size > 0) {
++        if (slave->mbox_eoe_init_data.payload_size > 0) {
+             ec_read_mbox_lock_clear(slave);
+             fsm->state = ec_fsm_eoe_set_ip_response_data;
+             fsm->state(fsm, datagram);
+@@ -430,7 +423,7 @@ void ec_fsm_eoe_set_ip_response(
+ 
+     if (fsm->datagram->working_counter != 1) {
+         // only an error if data has not already been read by another read request
+-        if (slave->mbox_eoe_data.payload_size == 0) {
++        if (slave->mbox_eoe_init_data.payload_size == 0) {
+             fsm->state = ec_fsm_eoe_error;
+             ec_read_mbox_lock_clear(slave);
+             EC_SLAVE_ERR(slave, "Reception of EoE read response failed: ");
+@@ -454,13 +447,13 @@ void ec_fsm_eoe_set_ip_response_data(
+ {
+     ec_slave_t *slave = fsm->slave;
+     ec_master_t *master = slave->master;
+-    uint8_t *data, mbox_prot, frame_type;
++    uint8_t *data, mbox_prot, eoe_type;
+     size_t rec_size;
+     ec_eoe_request_t *req = fsm->request;
+ 
+     // process the data available or initiate a new mailbox read check
+-    if (slave->mbox_eoe_data.payload_size > 0) {
+-        slave->mbox_eoe_data.payload_size = 0;
++    if (slave->mbox_eoe_init_data.payload_size > 0) {
++        slave->mbox_eoe_init_data.payload_size = 0;
+     } else {
+         // initiate a new mailbox read check if required data is not available
+         if (ec_read_mbox_locked(slave)) {
+@@ -473,7 +466,7 @@ void ec_fsm_eoe_set_ip_response_data(
+         return;
+     }
+ 
+-    data = ec_slave_mbox_fetch(slave, &slave->mbox_eoe_data, &mbox_prot, &rec_size);
++    data = ec_slave_mbox_fetch(slave, &slave->mbox_eoe_init_data, &mbox_prot, &rec_size);
+     if (IS_ERR(data)) {
+         fsm->state = ec_fsm_eoe_error;
+         return;
+@@ -499,11 +492,11 @@ void ec_fsm_eoe_set_ip_response_data(
+         return;
+     }
+ 
+-    frame_type = EC_READ_U8(data) & 0x0f;
++    eoe_type = EC_READ_U8(data) & 0x0F;
+ 
+-    if (frame_type != EC_EOE_FRAMETYPE_SET_IP_RES) {
+-        EC_SLAVE_ERR(slave, "Received no set IP parameter response"
+-                " (frame type %x).\n", frame_type);
++    if (eoe_type != EC_EOE_TYPE_INIT_RES) {
++        EC_SLAVE_ERR(slave, "EoE Init handler received other EoE type response"
++                " (type %x). Dropping.\n", eoe_type);
+         ec_print_data(data, rec_size);
+         fsm->state = ec_fsm_eoe_error;
+         return;
+diff --git a/master/fsm_slave.c b/master/fsm_slave.c
+--- a/master/fsm_slave.c
++++ b/master/fsm_slave.c
+@@ -687,13 +687,13 @@ void ec_fsm_slave_state_eoe_request(
+     }
+ 
+     if (ec_fsm_eoe_success(&fsm->fsm_eoe)) {
+-		req->state = EC_INT_REQUEST_SUCCESS;
+-		EC_SLAVE_DBG(slave, 1, "Finished EoE request.\n");
++        req->state = EC_INT_REQUEST_SUCCESS;
++        EC_SLAVE_DBG(slave, 1, "Finished EoE request.\n");
+     }
+-	else {
++    else {
+         req->state = EC_INT_REQUEST_FAILURE;
+         EC_SLAVE_ERR(slave, "Failed to process EoE request.\n");
+-	}
++    }
+ 
+     wake_up_all(&slave->master->request_queue);
+     fsm->eoe_request = NULL;
+diff --git a/master/master.c b/master/master.c
+--- a/master/master.c
++++ b/master/master.c
+@@ -1165,6 +1165,9 @@ void ec_master_receive_datagrams(
+ {
+     size_t frame_size, data_size;
+     uint8_t datagram_type, datagram_index, datagram_mbox_prot;
++#ifdef EC_EOE
++    uint8_t eoe_type;
++#endif
+     unsigned int cmd_follows, datagram_slave_addr, datagram_offset_addr, datagram_wc, matched;
+     const uint8_t *cur_data;
+     ec_datagram_t *datagram;
+@@ -1286,9 +1289,31 @@ void ec_master_receive_datagrams(
+                                     switch (datagram_mbox_prot) {
+ #ifdef EC_EOE
+                                     case EC_MBOX_TYPE_EOE:
+-                                        if ((slave->mbox_eoe_data.data) && (data_size <= slave->mbox_eoe_data.data_size)) {
+-                                            memcpy(slave->mbox_eoe_data.data, cur_data, data_size);
+-                                            slave->mbox_eoe_data.payload_size = data_size;
++                                            // check EOE type and store in correct handlers mbox data cache
++                                            eoe_type = EC_READ_U8(cur_data + 6) & 0x0F;
++
++                                            switch (eoe_type) {
++                                              
++                                            case EC_EOE_TYPE_FRAME_FRAG:
++                                                // EoE Frame Fragment handler
++                                                if ((slave->mbox_eoe_frag_data.data) && (data_size <= slave->mbox_eoe_frag_data.data_size)) {
++                                                    memcpy(slave->mbox_eoe_frag_data.data, cur_data, data_size);
++                                                    slave->mbox_eoe_frag_data.payload_size = data_size;
++                                                }
++                                                break;
++                                            case EC_EOE_TYPE_INIT_RES:
++                                                // EoE Init / Set IP response handler
++                                                if ((slave->mbox_eoe_init_data.data) && (data_size <= slave->mbox_eoe_init_data.data_size)) {
++                                                    memcpy(slave->mbox_eoe_init_data.data, cur_data, data_size);
++                                                    slave->mbox_eoe_init_data.payload_size = data_size;
++                                                }
++                                                break;
++                                            default:
++                                                EC_MASTER_DBG(master, 1, "Unhandled EoE protocol type from slave: %u Protocol: %u, Type: %x\n",
++                                                        datagram_slave_addr, datagram_mbox_prot, eoe_type);
++                                                // copy instead received data into the datagram memory.
++                                                memcpy(datagram->data, cur_data, data_size);
++                                                break;
+                                         }
+                                         break;
+ #endif
+diff --git a/master/slave.c b/master/slave.c
+--- a/master/slave.c
++++ b/master/slave.c
+@@ -169,7 +169,8 @@ void ec_slave_init(
+     rt_mutex_init(&slave->mbox_sem);
+ 
+ #ifdef EC_EOE
+-    ec_mbox_data_init(&slave->mbox_eoe_data);
++    ec_mbox_data_init(&slave->mbox_eoe_frag_data);
++    ec_mbox_data_init(&slave->mbox_eoe_init_data);
+ #endif
+     ec_mbox_data_init(&slave->mbox_coe_data);
+     ec_mbox_data_init(&slave->mbox_foe_data);
+@@ -306,7 +307,8 @@ void ec_slave_clear(ec_slave_t *slave /*
+ 
+     // free mailbox response data
+ #ifdef EC_EOE
+-    ec_mbox_data_clear(&slave->mbox_eoe_data);
++    ec_mbox_data_clear(&slave->mbox_eoe_frag_data);
++    ec_mbox_data_clear(&slave->mbox_eoe_init_data);
+ #endif
+     ec_mbox_data_clear(&slave->mbox_coe_data);
+     ec_mbox_data_clear(&slave->mbox_foe_data);
+diff --git a/master/slave.h b/master/slave.h
+--- a/master/slave.h
++++ b/master/slave.h
+@@ -261,7 +261,8 @@ struct ec_slave
+     struct rt_mutex mbox_sem; /**< Semaphore protecting the check_mbox variable. */
+ 
+ #ifdef EC_EOE
+-    ec_mbox_data_t mbox_eoe_data; /**< Received mailbox data for EoE. */
++    ec_mbox_data_t mbox_eoe_frag_data; /**< Received mailbox data for EoE, type frame fragment. */
++    ec_mbox_data_t mbox_eoe_init_data; /**< Received mailbox data for EoE, type eoe init reponse. */
+ #endif
+     ec_mbox_data_t mbox_coe_data; /**< Received mailbox data for CoE. */
+     ec_mbox_data_t mbox_foe_data; /**< Received mailbox data for FoE. */

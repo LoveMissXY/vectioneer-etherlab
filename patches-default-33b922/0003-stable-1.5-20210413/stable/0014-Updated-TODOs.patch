@@ -1,0 +1,27 @@
+From f24ef1a3441e620106d3b628e6e35825be3167ef Mon Sep 17 00:00:00 2001
+From: Florian Pose <fp@igh.de>
+Date: Tue, 6 Apr 2021 12:49:18 +0200
+Subject: [PATCH 14/24] Updated TODOs.
+
+---
+ TODO | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/TODO b/TODO
+index 89369e7c..b8085eec 100644
+--- a/TODO
++++ b/TODO
+@@ -60,6 +60,10 @@ Future issues:
+     - Output error after usage.
+ * Fix bus scan hang when calling ecrt_master_deactivate().
+ 
++Documentation
++
++* Update FSM graphs.
++
+ Smaller issues:
+ 
+ * Read out CRC counters.
+-- 
+2.25.1
+

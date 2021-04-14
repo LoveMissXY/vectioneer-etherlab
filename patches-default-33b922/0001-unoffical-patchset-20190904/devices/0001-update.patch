@@ -1,0 +1,39 @@
+From: Gavin Lambert <gavin.lambert@tomra.com>
+Date: Fri Jul 12 12:29:10 2019 +1200
+
+Fix some inconsistencies in the upstream device update scripts.
+
+diff --git a/devices/igb/update.sh b/devices/igb/update.sh
+--- a/devices/igb/update.sh
++++ b/devices/igb/update.sh
+@@ -25,5 +25,6 @@ for f in $FILES; do
+     op=${f/\./-$PREVER-orig.}
+     ep=${f/\./-$PREVER-ethercat.}
+     diff -u $op $ep | patch -p1 $e
++    sed -i s/$PREVER-ethercat.h/$KERNELVER-ethercat.h/ $e
+     hg add $o $e
+ done
+diff --git a/devices/update.sh b/devices/update.sh
+--- a/devices/update.sh
++++ b/devices/update.sh
+@@ -1,11 +1,16 @@
+ #!/bin/bash
+ 
++if [ $# -ne 3 ]; then
++    echo "Need 3 arguments: 1) kernel source dir, 2) previous version, 3) version to add"
++    exit 1
++fi
++
++KERNELDIR=$1
++PREVER=$2
++KERNELVER=$3
++
+ set -x
+ 
+-KERNELDIR=/data/kernel/linux-4.4.162
+-PREVER=3.16
+-KERNELVER=4.4
+-
+ for f in $KERNELDIR/drivers/net/ethernet/{realtek/8139too,realtek/r8169,intel/e100}.c; do
+     echo $f
+     b=$(basename $f)

@@ -1,0 +1,37 @@
+From 2f9c7ce1ad0291375799c2c00e28f0eff3892a6d Mon Sep 17 00:00:00 2001
+From: Sebastien BLANCHET <blanchet@iram.fr>
+Date: Thu, 8 Apr 2021 18:55:53 +0200
+Subject: [PATCH 18/24] doc: promote \subsection to \section in chapter "Timing
+ Aspects"
+
+The chapter "Timing Aspects" had \subsection but not \section
+Therefore, promote all \subsection to \section
+---
+ documentation/ethercat_doc.tex | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/documentation/ethercat_doc.tex b/documentation/ethercat_doc.tex
+index 54d74406..faff6626 100644
+--- a/documentation/ethercat_doc.tex
++++ b/documentation/ethercat_doc.tex
+@@ -2971,7 +2971,7 @@ are rare, there are a few aspects that can (and should be) dealt with.
+ 
+ %------------------------------------------------------------------------------
+ 
+-\subsection{Application Interface Profiling}
++\section{Application Interface Profiling}
+ \label{sec:timing-profile}
+ \index{Profiling}
+ % FIXME
+@@ -3053,7 +3053,7 @@ in \autoref{sec:timing-bus}.
+ 
+ %------------------------------------------------------------------------------
+ 
+-\subsection{Bus Cycle Measuring}
++\section{Bus Cycle Measuring}
+ \label{sec:timing-bus}
+ \index{Bus cycle}
+ 
+-- 
+2.25.1
+

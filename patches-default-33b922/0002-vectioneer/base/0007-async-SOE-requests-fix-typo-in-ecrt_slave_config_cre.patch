@@ -1,0 +1,26 @@
+From 70b9e5ba86a069eb520ba88110c45117992350cd Mon Sep 17 00:00:00 2001
+From: Mikhail Rudenko <mike.rudenko@gmail.com>
+Date: Tue, 8 Dec 2020 23:50:57 +0300
+Subject: [PATCH 7/9] async SOE requests: fix typo in
+ ecrt_slave_config_create_soe_request
+
+---
+ lib/slave_config.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/lib/slave_config.c b/lib/slave_config.c
+index 717e2b9..8ba1938 100644
+--- a/lib/slave_config.c
++++ b/lib/slave_config.c
+@@ -693,7 +693,7 @@ ec_soe_request_t *ecrt_slave_config_create_soe_request(
+ 
+     ret = ioctl(sc->master->fd, EC_IOCTL_SC_SOE_REQUEST, &data);
+     if (EC_IOCTL_IS_ERROR(ret)) {
+-        EC_PRINT_ERR("Failed to create SDO request: %s\n",
++        EC_PRINT_ERR("Failed to create SOE request: %s\n",
+                 strerror(EC_IOCTL_ERRNO(ret)));
+         ec_soe_request_clear(req);
+         free(req);
+-- 
+2.25.1
+

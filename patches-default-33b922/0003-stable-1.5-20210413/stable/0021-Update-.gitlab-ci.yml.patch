@@ -1,0 +1,27 @@
+From a9f55b4ac7a9f20f03a90965f8289f3696cec7d5 Mon Sep 17 00:00:00 2001
+From: Florian Pose <fp@igh.de>
+Date: Fri, 9 Apr 2021 14:39:27 +0000
+Subject: [PATCH 21/24] Update .gitlab-ci.yml
+
+---
+ .gitlab-ci.yml | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/.gitlab-ci.yml b/.gitlab-ci.yml
+index 56a3be57..a00bc6c6 100644
+--- a/.gitlab-ci.yml
++++ b/.gitlab-ci.yml
+@@ -1,5 +1,10 @@
+ build:
+     stage: build
++
++    before_script:
++        - apt update
++        - apt install linux-source
++
+     script:
+         - ./bootstrap
+         - ./configure --with-linux-dir=/usr/src/linux
+-- 
+2.25.1
+

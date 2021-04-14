@@ -1,0 +1,19 @@
+# HG changeset patch
+# User Florian Pose
+# Date 1539862517 -7200
+#      Thu Oct 18 13:35:17 2018 +0200
+Fixed typo.
+(grafted from 2768e52fe977d356651556f7b4aa3c2c68049404)
+
+diff --git a/documentation/ethercat_doc.tex b/documentation/ethercat_doc.tex
+--- a/documentation/ethercat_doc.tex
++++ b/documentation/ethercat_doc.tex
+@@ -758,7 +758,7 @@ position is now 1, so slave 3 is attache
+ 
+ \end{enumerate}
+ 
+-f the master sources are configured with \lstinline+--enable-wildcards+, then
++If the master sources are configured with \lstinline+--enable-wildcards+, then
+ \lstinline+0xffffffff+ matches every vendor ID and/or product code.
+ 
+ %------------------------------------------------------------------------------

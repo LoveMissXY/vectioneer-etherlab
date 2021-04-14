@@ -1,0 +1,17 @@
+From: Graeme Foot <Graeme.Foot@touchcut.com>
+Date: Tue, 3 Sep 2019 23:32:31 +0000
+
+Fix typo in ec_fsm_slave_clear.
+
+diff --git a/master/fsm_slave.c b/master/fsm_slave.c
+--- a/master/fsm_slave.c
++++ b/master/fsm_slave.c
+@@ -113,7 +113,7 @@ void ec_fsm_slave_clear(
+     }
+ 
+     if (fsm->eoe_request) {
+-        fsm->soe_request->state = EC_INT_REQUEST_FAILURE;
++        fsm->eoe_request->state = EC_INT_REQUEST_FAILURE;
+         wake_up_all(&fsm->slave->master->request_queue);
+     }
+ 

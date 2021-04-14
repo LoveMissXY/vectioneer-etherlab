@@ -1,0 +1,36 @@
+# HG changeset patch
+# User Florian Pose
+# Date 1548164095 -3600
+#      Tue Jan 22 14:34:55 2019 +0100
+Added extern "C" for floating-point functions.
+(grafted from 5f29e43487df35a5497eeda257661e07a1673012)
+
+diff --git a/include/ecrt.h b/include/ecrt.h
+--- a/include/ecrt.h
++++ b/include/ecrt.h
+@@ -2051,12 +2051,6 @@ void ecrt_reg_request_read(
+         size_t size /**< Size to write. */
+         );
+ 
+-/*****************************************************************************/
+-
+-#ifdef __cplusplus
+-}
+-#endif
+-
+ /******************************************************************************
+  * Bitwise read/write macros
+  *****************************************************************************/
+@@ -2348,6 +2342,12 @@ void ecrt_write_lreal(void *data, double
+ 
+ /*****************************************************************************/
+ 
++#ifdef __cplusplus
++}
++#endif
++
++/*****************************************************************************/
++
+ /** @} */
+ 
+ #endif

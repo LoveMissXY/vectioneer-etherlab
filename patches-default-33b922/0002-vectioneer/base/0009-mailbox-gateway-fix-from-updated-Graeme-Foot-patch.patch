@@ -1,0 +1,47 @@
+From c13f6d4f1627b0dbe241af16ec79e9068b387f89 Mon Sep 17 00:00:00 2001
+From: Mark Verrijt <mark.verrijt@vectioneer.com>
+Date: Wed, 7 Apr 2021 11:27:33 +0200
+Subject: [PATCH 9/9] mailbox gateway fix from updated Graeme Foot patch
+
+---
+ master/fsm_mbox_gateway.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/master/fsm_mbox_gateway.c b/master/fsm_mbox_gateway.c
+index dcad614..19ee514 100644
+--- a/master/fsm_mbox_gateway.c
++++ b/master/fsm_mbox_gateway.c
+@@ -174,6 +174,12 @@ int ec_fsm_mbg_prepare_start(
+     // copy payload
+     data = datagram->data;
+     memcpy(data, request->data, request->data_size);
++    
++    // clear the Mailbox Header counter value (keeping the protocol type)
++    // header byte 6 stores: protocol type (4), cnt (3), reserved (1)
++    // Note: a counter value of zero means the slave should always
++    //   process the request
++    EC_WRITE_U8(data + 5, EC_READ_U8(data + 5) & 0x0F);
+ 
+     fsm->state = ec_fsm_mbg_request;
+     
+@@ -233,7 +239,7 @@ void ec_fsm_mbg_start(
+ 
+     // check protocol type supported by slave
+     if ( (request->data_size < EC_MBOX_HEADER_SIZE) ||
+-            !mbox_type_to_prot(EC_READ_U16(request->data + 5) & 0x0F, &mbox_prot) ||
++            !mbox_type_to_prot(EC_READ_U8(request->data + 5) & 0x0F, &mbox_prot) ||
+             !(slave->sii_image->sii.mailbox_protocols & mbox_prot) ) {
+         EC_SLAVE_ERR(slave, "Slave does not support requested mailbox type!\n");
+         request->error_code = EPROTONOSUPPORT;
+@@ -242,7 +248,7 @@ void ec_fsm_mbg_start(
+     }
+     
+     // cache the mbox type
+-    request->mbox_type = EC_READ_U16(request->data + 5) & 0x0F;
++    request->mbox_type = EC_READ_U8(request->data + 5) & 0x0F;
+     
+     if (slave->configured_rx_mailbox_size <
+             request->data_size) {
+-- 
+2.25.1
+

@@ -1,0 +1,24 @@
+From d7550208801b968418df979fbc22057b065b7f0f Mon Sep 17 00:00:00 2001
+From: Florian Pose <fp@igh.de>
+Date: Fri, 9 Apr 2021 16:11:19 +0000
+Subject: [PATCH 23/24] Update .gitlab-ci.yml
+
+---
+ .gitlab-ci.yml | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/.gitlab-ci.yml b/.gitlab-ci.yml
+index f38c27b2..96699ded 100644
+--- a/.gitlab-ci.yml
++++ b/.gitlab-ci.yml
+@@ -10,5 +10,6 @@ build:
+         - ./configure --with-linux-dir=/usr/src/linux-headers-4.19.0-16-amd64 --disable-8139too
+         - make -j8 all modules
+ 
+-    
++include:
++    - template: 'Workflows/MergeRequest-Pipelines.gitlab-ci.yml'
+         
+-- 
+2.25.1
+

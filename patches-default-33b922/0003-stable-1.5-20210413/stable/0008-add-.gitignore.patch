@@ -1,0 +1,67 @@
+From daa3494734778324f7a1603d9145eaf151b8f9aa Mon Sep 17 00:00:00 2001
+From: Sebastien BLANCHET <blanchet@iram.fr>
+Date: Fri, 5 Mar 2021 16:02:24 +0100
+Subject: [PATCH 08/24] add .gitignore
+
+---
+ .gitignore               | 30 ++++++++++++++++++++++++++++++
+ documentation/.gitignore | 10 ++++++++++
+ 2 files changed, 40 insertions(+)
+ create mode 100644 .gitignore
+ create mode 100644 documentation/.gitignore
+
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 00000000..c829cfb1
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,30 @@
++*~
++autoconf
++autom4te.cache/
++ChangeLog
++config.h
++config.h.in
++config.log
++config.status
++configure
++.deps
++Doxyfile
++ethercat.spec
++examples/dc_user/ec_dc_user_example
++examples/user/ec_user_example
++Kbuild
++lib/libethercat.la
++.libs
++libtool
++*.lo
++*.m4
++mailbox_gateway/ethercat_mbg
++Makefile
++Makefile.in
++master/.dirstamp
++*.o
++script/ethercatctl
++script/ethercat.service
++script/init.d/ethercat
++stamp-h1
++tool/ethercat
+diff --git a/documentation/.gitignore b/documentation/.gitignore
+new file mode 100644
+index 00000000..1a8fcc27
+--- /dev/null
++++ b/documentation/.gitignore
+@@ -0,0 +1,10 @@
++*.aux
++/external
++*.idx
++*.lof
++*.log
++*.lot
++*.nlo
++*.out
++*.pdf
++*.toc
+-- 
+2.25.1
+

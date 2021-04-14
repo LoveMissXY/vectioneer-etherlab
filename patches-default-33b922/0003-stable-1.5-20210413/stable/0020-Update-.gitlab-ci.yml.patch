@@ -1,0 +1,28 @@
+From 573e490b02709725b8194a1a33eae9febe825a7d Mon Sep 17 00:00:00 2001
+From: Florian Pose <fp@igh.de>
+Date: Fri, 9 Apr 2021 14:02:33 +0000
+Subject: [PATCH 20/24] Update .gitlab-ci.yml
+
+---
+ .gitlab-ci.yml | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/.gitlab-ci.yml b/.gitlab-ci.yml
+index ecc256c9..56a3be57 100644
+--- a/.gitlab-ci.yml
++++ b/.gitlab-ci.yml
+@@ -2,8 +2,8 @@ build:
+     stage: build
+     script:
+         - ./bootstrap
+-        - ./configure
++        - ./configure --with-linux-dir=/usr/src/linux
+         - make all modules
+ 
+     
+-        
+\ No newline at end of file
++        
+-- 
+2.25.1
+
