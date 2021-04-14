@@ -1,0 +1,188 @@
+From a5760612261cb2012f18e36793f2378afdace0a8 Mon Sep 17 00:00:00 2001
+From: Mark Verrijt <mark.verrijt@vectioneer.com>
+Date: Wed, 14 Apr 2021 19:02:21 +0200
+Subject: [PATCH 3/3] unbind and bind drivers on nic in ethercat initd script
+
+---
+ script/init.d/ethercat.in | 129 +++++++++++++++++++++++++++++++-------
+ 1 file changed, 105 insertions(+), 24 deletions(-)
+
+diff --git a/script/init.d/ethercat.in b/script/init.d/ethercat.in
+index 435ecc05..357ca9e8 100755
+--- a/script/init.d/ethercat.in
++++ b/script/init.d/ethercat.in
+@@ -56,6 +56,11 @@ MASTER_ARGS=
+ 
+ #------------------------------------------------------------------------------
+ 
++USE_REBIND=true
++ECDEVSYSLINKS=/tmp/ecdevsyslinks # Temporary file to remember which devices to unbind from
++
++#------------------------------------------------------------------------------
++
+ ETHERCAT_CONFIG=/etc/ethercat.conf
+ 
+ if [ ! -r ${ETHERCAT_CONFIG} ]; then
+@@ -138,6 +143,15 @@ parse_mac_address() {
+ 
+ #------------------------------------------------------------------------------
+ 
++contains_element () {
++  local e match="$1"
++  shift
++  for e; do [[ "$e" == "$match" ]] && return 0; done
++  return 1
++}
++
++#------------------------------------------------------------------------------
++
+ if [ -r /etc/rc.status ]; then
+     . /etc/rc.status
+     rc_reset
+@@ -207,26 +221,73 @@ start)
+         exit_fail
+     fi
+ 
+-    # check for modules to replace
+-    for MODULE in ${DEVICE_MODULES}; do
+-        ECMODULE=ec_${MODULE}
+-        if ! ${MODINFO} ${ECMODULE} > /dev/null; then
+-            continue # ec_* module not found
+-        fi
+-        if [ ${MODULE} != "generic" ]; then
+-            if ${LSMOD} | grep "^${MODULE} " > /dev/null; then
+-                if ! ${RMMOD} ${MODULE}; then
+-                    exit_fail
+-                fi
+-            fi
+-        fi
+-        if ! ${MODPROBE} ${MODPROBE_FLAGS} ${ECMODULE}; then
+-            if [ ${MODULE} != "generic" ]; then
+-                ${MODPROBE} ${MODPROBE_FLAGS} ${MODULE} # try to restore
+-            fi
+-            exit_fail
+-        fi
+-    done
++    if [ "${USE_REBIND}" != true ]; then
++        # check for modules to replace
++        for MODULE in ${DEVICE_MODULES}; do
++            ECMODULE=ec_${MODULE}
++            if ! ${MODINFO} ${ECMODULE} > /dev/null; then
++                continue # ec_* module not found
++            fi
++            if [ ${MODULE} != "generic" ]; then
++                if ${LSMOD} | grep "^${MODULE} " > /dev/null; then
++                    if ! ${RMMOD} ${MODULE}; then
++                        exit_fail
++                    fi
++                fi
++            fi
++            if ! ${MODPROBE} ${MODPROBE_FLAGS} ${ECMODULE}; then
++                if [ ${MODULE} != "generic" ]; then
++                    ${MODPROBE} ${MODPROBE_FLAGS} ${MODULE} # try to restore
++                fi
++                exit_fail
++            fi
++        done
++    else
++        # load modules and unbind/bind (instead of replacing)
++        for MODULE in ${DEVICE_MODULES}; do
++            ECMODULE=ec_${MODULE}
++            if ! ${MODINFO} ${ECMODULE} > /dev/null; then
++                continue # ec_* module not found
++            fi
++
++            if ! ${MODPROBE} ${MODPROBE_FLAGS} ${ECMODULE}; then
++                exit_fail
++            fi
++        done
++
++        rm ${ECDEVSYSLINKS} 2>/dev/null # clean/rm the temp file
++        MASTER_INDEX=0
++        while true; do
++            DEVICE=$(eval echo "\${MASTER${MASTER_INDEX}_DEVICE}")
++            if [ -z "${DEVICE}" ]; then break; fi
++
++            # get current module used via name (i.e. eth0)
++            DEVLINK=$(readlink -f /sys/class/net/${DEVICE}/device)
++            MODULE=$(readlink -f ${DEVLINK}/driver/module | sed "s|.*/||") # get current module/driver used (i.e. igb)
++
++            # check if ethercat config file specifies to use dedicated driver
++            contains_element "${MODULE}" "${DEVICE_MODULES[@]}"
++            ce=$?
++
++            # replace current module with ec module if needed
++            ECMODULE=ec_${MODULE}
++            if [ ${ce} -ne 1 ] && [ "${MODULE}" != "${ECMODULE}" ]; then
++            #if [ "${MODULE}" != "${ECMODULE}" ]; then
++                if ! ${MODINFO} ${ECMODULE} > /dev/null; then
++                    exit_fail # ec_* module not found
++                fi
++
++                # add link to temp file
++                echo ${DEVLINK} >> ${ECDEVSYSLINKS}
++
++                DEV=$(echo ${DEVLINK} | sed "s|.*/||") # get device [[[[<domain>]:]<bus>]:][<slot>][.[<func>]]
++                SUB=$(readlink -f ${DEVLINK}/subsystem/drivers) # get location to other drivers for subsystem
++                echo $DEV > ${DEVLINK}/driver/unbind # unbind current driver
++                echo $DEV > ${SUB}/${ECMODULE}/bind  # bind ec driver
++            fi
++            MASTER_INDEX=$(expr ${MASTER_INDEX} + 1)
++        done
++    fi
+ 
+     exit_success
+     ;;
+@@ -234,6 +295,24 @@ start)
+ stop)
+     echo -n "Shutting down EtherCAT master @VERSION@ "
+ 
++    if [ "${USE_REBIND}" = true ]; then
++        # Get device links from temp file
++        mapfile DEVLINKS 2>/dev/null < ${ECDEVSYSLINKS}
++        for DEVLINK in ${DEVLINKS[*]}; do
++            if [ -z "${DEVLINK}" ]; then break; fi
++
++            DEV=$(echo ${DEVLINK} | sed "s|.*/||")  # get device [[[[<domain>]:]<bus>]:][<slot>][.[<func>]]
++            MODULE=$(readlink -f ${DEVLINK}/driver/module | sed "s|.*/||") # get current module used
++            if [ "${MODULE:0:3}" == "ec_" ]; then
++                # if current module being used has "ec_" prefix unbind it and bind it to non-ec module
++                SUB=$(readlink -f ${DEVLINK}/subsystem/drivers) # get location to other drivers for subsystem
++                echo $DEV > ${DEVLINK}/driver/unbind # unbind ec driver
++                echo $DEV > ${SUB}/${MODULE:3}/bind  # bind non-ec driver
++            fi
++        done
++        rm ${ECDEVSYSLINKS} 2>/dev/null # clean/rm the temp file
++    fi
++
+     # unload EtherCAT device modules
+     for MODULE in ${DEVICE_MODULES} master; do
+         ECMODULE=ec_${MODULE}
+@@ -247,14 +326,16 @@ stop)
+ 
+     sleep 1
+ 
+-    # reload previous modules
+-    for MODULE in ${DEVICE_MODULES}; do
+-        if [ ${MODULE} != "generic" ]; then
+-            if ! ${MODPROBE} ${MODPROBE_FLAGS} ${MODULE}; then
+-                echo Warning: Failed to restore ${MODULE}.
+-            fi
+-        fi
+-    done
++    if [ "${USE_REBIND}" != true ]; then
++        # reload previous modules
++        for MODULE in ${DEVICE_MODULES}; do
++            if [ ${MODULE} != "generic" ]; then
++                if ! ${MODPROBE} ${MODPROBE_FLAGS} ${MODULE}; then
++                    echo Warning: Failed to restore ${MODULE}.
++                fi
++            fi
++        done
++    fi
+ 
+     exit_success
+     ;;
+-- 
+2.25.1
+
