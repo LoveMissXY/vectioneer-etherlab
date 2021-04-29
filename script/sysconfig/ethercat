@@ -115,4 +115,10 @@ DEVICE_MODULES=""
 #
 #LINK_DEVICES="eth0"
 
+#
+# Try to load ec kernel modules and bind devices to them instead of replacing
+# the entire module (needed when multiple ports on same module).
+#
+ENABLE_BINDING=true
+
 #------------------------------------------------------------------------------
