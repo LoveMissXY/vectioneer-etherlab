@@ -1,3 +1,4 @@
+ccat/0001-devices-ccat-revert-limit-rx-processing-to-one-frame.patch
 stable/0001-Using-vmalloc-for-FoE-memory-allocation.patch
 stable/0002-Fixed-infinite-waiting-for-SoE-write-response.patch
 stable/0003-Fixed-possible-file-name-overflow.patch
