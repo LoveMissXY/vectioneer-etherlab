@@ -10,6 +10,4 @@ base/0009-mailbox-gateway-fix-from-updated-Graeme-Foot-patch.patch
 base/0010-Fix-memory-leak-in-igb-driver-for-kernel-4.14-and-4.patch
 base/0011-Added-5.4-kernel-drivers.patch
 base/0012-gettimeofday-wrapper-for-kernel-5.x.patch
-init/0001-point-ethercat-initd-script-to-etc-ethercat.conf.patch
-init/0002-also-check-device-name-in-ethercat-initd-script.patch
-init/0003-unbind-and-bind-drivers-on-nic-in-ethercat-initd-scr.patch
+init.d/0001-extend-initd-script-to-use-device-names.patch

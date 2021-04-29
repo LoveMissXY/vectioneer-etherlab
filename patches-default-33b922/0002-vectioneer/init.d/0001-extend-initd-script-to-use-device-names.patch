@@ -1,0 +1,261 @@
+From bdca768f69fc91bc4bc129177a5a68ac2cb75e71 Mon Sep 17 00:00:00 2001
+From: Mark Verrijt <mark.verrijt@vectioneer.com>
+Date: Thu, 29 Apr 2021 15:12:22 +0200
+Subject: [PATCH] extend initd script to use device names
+
+  - point ethercat initd script to /etc/ethercat.conf
+  - implement the use of devices names in initd script
+  - auto disable arp and link up
+  - unbind and bind drivers on nic in ethercat initd script
+---
+ script/ethercat.conf      |   6 ++
+ script/init.d/ethercat.in | 136 ++++++++++++++++++++++++++++++++++++--
+ script/sysconfig/ethercat |   6 ++
+ 3 files changed, 143 insertions(+), 5 deletions(-)
+
+diff --git a/script/ethercat.conf b/script/ethercat.conf
+index b4f68e21..2ad53865 100644
+--- a/script/ethercat.conf
++++ b/script/ethercat.conf
+@@ -115,4 +115,10 @@ DEVICE_MODULES=""
+ #
+ #LINK_DEVICES="eth0"
+ 
++#
++# Try to load ec kernel modules and bind devices to them instead of replacing
++# the entire module (needed when multiple ports on same module).
++#
++ENABLE_BINDING=true
++
+ #------------------------------------------------------------------------------
+diff --git a/script/init.d/ethercat.in b/script/init.d/ethercat.in
+index 153afa16..566a00b9 100755
+--- a/script/init.d/ethercat.in
++++ b/script/init.d/ethercat.in
+@@ -56,7 +56,12 @@ MASTER_ARGS=
+ 
+ #------------------------------------------------------------------------------
+ 
+-ETHERCAT_CONFIG=/etc/sysconfig/ethercat
++BIND_IGNORES=( 'ccat' 'ccat_netdev' )
++BIND_DEVICES=/var/lib/ethercat/binded_devices
++
++#------------------------------------------------------------------------------
++
++ETHERCAT_CONFIG=/etc/ethercat.conf
+ 
+ if [ ! -r ${ETHERCAT_CONFIG} ]; then
+     echo ${ETHERCAT_CONFIG} not existing;
+@@ -132,6 +137,15 @@ parse_mac_address() {
+ 
+ #------------------------------------------------------------------------------
+ 
++contains_element () {
++    local e match="$1"
++    shift
++    for e; do [[ "$e" == "$match" ]] && return 0; done
++    return 1
++}
++
++#------------------------------------------------------------------------------
++
+ if [ -r /etc/rc.status ]; then
+     . /etc/rc.status
+     rc_reset
+@@ -142,6 +156,15 @@ case "${1}" in
+ start)
+     echo -n "Starting EtherCAT master @VERSION@ "
+ 
++    # get device name <-> mac address mapping
++    declare -A ND_MAC2NAME;
++    declare -A ND_NAME2MAC;
++    for ND_NAME in $(basename -a /sys/class/net/*); do
++        ND_MAC=$(cat /sys/class/net/${ND_NAME}/address 2> /dev/null)
++        ND_MAC2NAME["${ND_MAC,,}"]="${ND_NAME}"
++        ND_NAME2MAC["${ND_NAME}"]="${ND_MAC,,}"
++    done
++
+     # construct DEVICES and BACKUPS from configuration variables
+     DEVICES=""
+     BACKUPS=""
+@@ -156,11 +179,42 @@ start)
+             BACKUPS=${BACKUPS},
+         fi
+ 
++        # assume the input is a mac-address (1st) or device name (2nd)
++        DEVICE_NAME="${ND_MAC2NAME[${DEVICE,,}]}"
++        if [ -z "${DEVICE_NAME}" ]; then
++            DEVICE_MAC="${ND_NAME2MAC[${DEVICE}]}"
++            if [ ! -z "${DEVICE_MAC}" ]; then
++                DEVICE_NAME="${DEVICE}"
++                DEVICE="${DEVICE_MAC}"
++            fi
++        fi
++
++        if [ ! -z "${BACKUP}" ]; then
++            BACKUP_NAME="${ND_MAC2NAME[${BACKUP,,}]}"
++            if [ -z "${BACKUP_NAME}" ]; then
++                BACKUP_MAC="${ND_NAME2MAC[${BACKUP}]}"
++                if [ ! -z "${BACKUP_MAC}" ]; then
++                    BACKUP_NAME="${BACKUP}"
++                    BACKUP="${BACKUP_MAC}"
++                fi
++            fi
++        fi
++        
+         parse_mac_address ${DEVICE}
+         DEVICES=${DEVICES}${MAC}
+ 
+         parse_mac_address ${BACKUP}
+         BACKUPS=${BACKUPS}${MAC}
++        
++        if [ ! -z "${DEVICE_NAME}" ]; then
++            ip link set ${DEVICE_NAME} arp off
++            ip link set ${DEVICE_NAME} up
++        fi
++
++        if [ ! -z "${BACKUP_NAME}" ]; then
++            ip link set ${BACKUP_NAME} arp off
++            ip link set ${BACKUP_NAME} up
++        fi
+ 
+         MASTER_INDEX=$(expr ${MASTER_INDEX} + 1)
+     done
+@@ -181,7 +235,7 @@ start)
+             EOE_INTERFACES_CMD="${EOE_INTERFACES_CMD},${IFACE}"
+         fi
+     done
+-    
++
+     # build EOE auto create command
+     EOE_AUTOCREATE_CMD=""
+     if [ -n "${EOE_AUTOCREATE}" ]; then
+@@ -207,7 +261,12 @@ start)
+         if ! ${MODINFO} ${ECMODULE} > /dev/null; then
+             continue # ec_* module not found
+         fi
+-        if [ ${MODULE} != "generic" ]; then
++        REPLACE_MODULE=false
++        if [ ${MODULE} != "generic" ] && [ "${ENABLE_BINDING}" != true ] || \
++           contains_element "${MODULE}" "${BIND_IGNORES[@]}"; then
++            REPLACE_MODULE=true
++        fi
++        if [ "${REPLACE_MODULE}" = true ]; then
+             if ${LSMOD} | grep "^${MODULE} " > /dev/null; then
+                 if ! ${RMMOD} ${MODULE}; then
+                     exit_fail
+@@ -215,19 +274,81 @@ start)
+             fi
+         fi
+         if ! ${MODPROBE} ${MODPROBE_FLAGS} ${ECMODULE}; then
+-            if [ ${MODULE} != "generic" ]; then
++            if [ "${REPLACE_MODULE}" = true ]; then
+                 ${MODPROBE} ${MODPROBE_FLAGS} ${MODULE} # try to restore
+             fi
+             exit_fail
+         fi
+     done
+ 
++    if [ "${ENABLE_BINDING}" = true ]; then
++        # load modules and unbind/bind (instead of replacing)
++        [ -d $(dirname ${BIND_DEVICES}) ] || mkdir -p $(dirname ${BIND_DEVICES})
++
++        rm ${BIND_DEVICES} 2>/dev/null # clean/rm the temp file
++        MASTER_INDEX=0
++        while true; do
++            DEVICE=$(eval echo "\${MASTER${MASTER_INDEX}_DEVICE}")
++            if [ -z "${DEVICE}" ]; then break; fi
++
++            # assume the input is a mac-address (1st) or device name (2nd)
++            DEVICE_NAME="${ND_MAC2NAME[${DEVICE,,}]}"
++            if [ -z "${DEVICE_NAME}" ]; then
++                DEVICE_MAC="${ND_NAME2MAC[${DEVICE}]}"
++                if [ ! -z "${DEVICE_MAC}" ]; then
++                    DEVICE_NAME="${DEVICE}"
++                else
++                    break
++                fi
++            fi
++
++            # get current module used via name (i.e. eth0)
++            DEVLINK=$(readlink -f /sys/class/net/${DEVICE_NAME}/device)
++            MODULE=$(readlink -f ${DEVLINK}/driver/module | sed "s|.*/||") # get current module/driver used (i.e. igb)
++
++            # replace current module with ec module if needed
++            ECMODULE=ec_${MODULE}
++            if contains_element "${MODULE}" "${DEVICE_MODULES[@]}" && [ "${MODULE}" != "${ECMODULE}" ]; then
++                if ! ${MODINFO} ${ECMODULE} > /dev/null; then
++                    exit_fail # ec_* module not found
++                fi
++
++                # add link to temp file
++                echo ${DEVLINK} >> ${BIND_DEVICES}
++
++                DEV=$(echo ${DEVLINK} | sed "s|.*/||") # get device [[[[<domain>]:]<bus>]:][<slot>][.[<func>]]
++                SUB=$(readlink -f ${DEVLINK}/subsystem/drivers) # get location to other drivers for subsystem
++                echo $DEV > ${DEVLINK}/driver/unbind # unbind current driver
++                echo $DEV > ${SUB}/${ECMODULE}/bind  # bind ec driver
++            fi
++            MASTER_INDEX=$(expr ${MASTER_INDEX} + 1)
++        done
++    fi
++
+     exit_success
+     ;;
+ 
+ stop)
+     echo -n "Shutting down EtherCAT master @VERSION@ "
+ 
++    if [ "${ENABLE_BINDING}" = true ]; then
++        # Get device links from temp file
++        mapfile DEVLINKS 2>/dev/null < ${BIND_DEVICES}
++        for DEVLINK in ${DEVLINKS[*]}; do
++            if [ -z "${DEVLINK}" ]; then break; fi
++
++            DEV=$(echo ${DEVLINK} | sed "s|.*/||")  # get device [[[[<domain>]:]<bus>]:][<slot>][.[<func>]]
++            MODULE=$(readlink -f ${DEVLINK}/driver/module | sed "s|.*/||") # get current module used
++            if [ "${MODULE:0:3}" == "ec_" ]; then
++                # if current module being used has "ec_" prefix unbind it and bind it to non-ec module
++                SUB=$(readlink -f ${DEVLINK}/subsystem/drivers) # get location to other drivers for subsystem
++                echo $DEV > ${DEVLINK}/driver/unbind # unbind ec driver
++                echo $DEV > ${SUB}/${MODULE:3}/bind  # bind non-ec driver
++            fi
++        done
++        rm ${BIND_DEVICES} 2>/dev/null # clean/rm the temp file
++    fi
++
+     # unload EtherCAT device modules
+     for MODULE in ${DEVICE_MODULES} master; do
+         ECMODULE=ec_${MODULE}
+@@ -243,7 +364,12 @@ stop)
+ 
+     # reload previous modules
+     for MODULE in ${DEVICE_MODULES}; do
+-        if [ ${MODULE} != "generic" ]; then
++        RELOAD_MODULE=false
++        if [ ${MODULE} != "generic" ] && [ "${ENABLE_BINDING}" != true ] || \
++           contains_element "${MODULE}" "${BIND_IGNORES[@]}"; then
++            RELOAD_MODULE=true
++        fi
++        if [ "${RELOAD_MODULE}" = true ]; then
+             if ! ${MODPROBE} ${MODPROBE_FLAGS} ${MODULE}; then
+                 echo Warning: Failed to restore ${MODULE}.
+             fi
+diff --git a/script/sysconfig/ethercat b/script/sysconfig/ethercat
+index 6f1b80e3..c74677ab 100644
+--- a/script/sysconfig/ethercat
++++ b/script/sysconfig/ethercat
+@@ -115,4 +115,10 @@ DEVICE_MODULES=""
+ #
+ #LINK_DEVICES="eth0"
+ 
++#
++# Try to load ec kernel modules and bind devices to them instead of replacing
++# the entire module (needed when multiple ports on same module).
++#
++ENABLE_BINDING=true
++
+ #------------------------------------------------------------------------------
+-- 
+2.25.1
+
