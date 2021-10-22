@@ -38,9 +38,17 @@
 #define __EC_DEVICE_H__
 
 #include <linux/interrupt.h>
+#include <linux/version.h>
 
 #include "../devices/ecdev.h"
 #include "globals.h"
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
+struct timeval {
+    __kernel_old_time_t     tv_sec;     /* seconds */
+    __kernel_suseconds_t    tv_usec;    /* microseconds */
+};
+#endif
 
 /**
  * Size of the transmit ring.

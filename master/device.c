@@ -58,11 +58,10 @@
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
 static void do_gettimeofday(struct timeval *tv)
 {
-	struct timespec ts;
-
-	ktime_get_ts(&ts);
-	tv->tv_sec = ts.tv_sec;
-	tv->tv_usec = ts.tv_nsec / NSEC_PER_USEC;
+    struct timespec64 ts;
+    ktime_get_ts64(&ts);
+    tv->tv_sec = ts.tv_sec;
+    tv->tv_usec = ts.tv_nsec / NSEC_PER_USEC;
 }
 #endif
 
