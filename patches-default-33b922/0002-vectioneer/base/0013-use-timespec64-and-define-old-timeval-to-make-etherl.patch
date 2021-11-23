@@ -1,0 +1,57 @@
+From 04cc2acc9a1ceb2f6a6beda6d1fbe9fee269d2b7 Mon Sep 17 00:00:00 2001
+From: Mark Verrijt <mark.verrijt@vectioneer.com>
+Date: Fri, 22 Oct 2021 09:42:44 +0200
+Subject: [PATCH] use timespec64 and define 'old' timeval to make etherlab
+ compile in 5.10
+
+---
+ master/device.c | 9 ++++-----
+ master/device.h | 7 +++++++
+ 2 files changed, 11 insertions(+), 5 deletions(-)
+
+diff --git a/master/device.c b/master/device.c
+index d87b1a58..f345c6c2 100644
+--- a/master/device.c
++++ b/master/device.c
+@@ -58,11 +58,10 @@
+ #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
+ static void do_gettimeofday(struct timeval *tv)
+ {
+-	struct timespec ts;
+-
+-	ktime_get_ts(&ts);
+-	tv->tv_sec = ts.tv_sec;
+-	tv->tv_usec = ts.tv_nsec / NSEC_PER_USEC;
++    struct timespec64 ts;
++    ktime_get_ts64(&ts);
++    tv->tv_sec = ts.tv_sec;
++    tv->tv_usec = ts.tv_nsec / NSEC_PER_USEC;
+ }
+ #endif
+ 
+diff --git a/master/device.h b/master/device.h
+index 51db0d60..ce8099a3 100644
+--- a/master/device.h
++++ b/master/device.h
+@@ -38,10 +38,18 @@
+ #define __EC_DEVICE_H__
+ 
+ #include <linux/interrupt.h>
++#include <linux/version.h>
+ 
+ #include "../devices/ecdev.h"
+ #include "globals.h"
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
++struct timeval {
++    __kernel_old_time_t     tv_sec;     /* seconds */
++    __kernel_suseconds_t    tv_usec;    /* microseconds */
++};
++#endif
++
+ /**
+  * Size of the transmit ring.
+  * This memory ring is used to transmit frames. It is necessary to use
+-- 
+2.25.1
+
