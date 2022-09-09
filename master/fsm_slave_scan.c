@@ -1045,7 +1045,7 @@ void ec_fsm_slave_scan_state_sii_size(
         )
 {
     ec_slave_t *slave = fsm->slave;
-    uint16_t cat_type, cat_size, nwords_fb;
+    uint16_t cat_type, cat_size;
 
     if (ec_fsm_sii_exec(&fsm->fsm_sii, datagram))
         return;
@@ -1066,14 +1066,10 @@ void ec_fsm_slave_scan_state_sii_size(
         } else {
             fsm->slave->error_flag = 1;
             fsm->state = ec_fsm_slave_scan_state_error;
-            nwords_fb = (fsm->sii_offset / EC_FIRST_SII_CATEGORY_OFFSET) * EC_FIRST_SII_CATEGORY_OFFSET;
-            if (nwords_fb < EC_FIRST_SII_CATEGORY_OFFSET) {
-                nwords_fb = EC_FIRST_SII_CATEGORY_OFFSET;
-            }
             EC_SLAVE_ERR(slave, "Failed to determine SII content size:"
                     " Reading word offset 0x%04x failed. Assuming %u words.\n",
-                    fsm->sii_offset, nwords_fb);
-            slave->sii_image->nwords = nwords_fb;
+                    fsm->sii_offset, EC_FIRST_SII_CATEGORY_OFFSET);
+            slave->sii_image->nwords = EC_FIRST_SII_CATEGORY_OFFSET;
             goto alloc_sii;
         }
     }
