@@ -2004,9 +2004,9 @@ static int ec_master_operation_thread(void *priv_data)
             " with fsm interval = %u us, max data size=%zu\n",
             master->send_interval, master->max_queue_size);
     
-    hrtimer_init_sleeper(&t, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);     
+    hrtimer_init(&t.timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+    hrtimer_init_sleeper(&t, current);     
     
-       
     // wait till the next millisecond, before entering operation loop
     ideal_time = t.timer.base->get_time();
     start_time = ktime_to_us(ideal_time);
