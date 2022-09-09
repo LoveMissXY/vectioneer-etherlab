@@ -42,7 +42,6 @@
 #include <linux/device.h>
 #include <linux/version.h>
 #include <linux/hrtimer.h>
-#include <linux/freezer.h>
 #include <linux/vmalloc.h>
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
@@ -105,14 +104,13 @@ const unsigned int rate_intervals[] = {
 void ec_master_clear_slave_configs(ec_master_t *);
 void ec_master_clear_domains(ec_master_t *);
 static int ec_master_idle_thread(void *);
-//static int ec_master_operation_thread(void *);
+static int ec_master_operation_thread(void *);
 #ifdef EC_EOE
 static int ec_master_eoe_thread(void *);
 #endif
 void ec_master_find_dc_ref_clock(ec_master_t *);
 void ec_master_clear_device_stats(ec_master_t *);
 void ec_master_update_device_stats(ec_master_t *);
-static size_t ecrt_master_send_impl(ec_master_t *);
 
 /*****************************************************************************/
 
@@ -1929,7 +1927,7 @@ static int ec_master_idle_thread(void *priv_data)
         if (fsm_exec) {
             ec_master_queue_datagram(master, &master->fsm_datagram);
         }
-        sent_bytes = ecrt_master_send_impl(master);
+        sent_bytes = ecrt_master_send(master);
         ec_lock_up(&master->io_sem);
 
         if (ec_fsm_master_idle(&master->fsm)) {
@@ -1958,91 +1956,59 @@ static int ec_master_idle_thread(void *priv_data)
 
 /** Master kernel thread function for OPERATION phase.
  */
-//ktime_t ec_master_nanosleep_test(struct hrtimer_sleeper *t, ktime_t ideal_time, const unsigned long nsecs)
-//{
-//    t->task = current;
-//    ideal_time = ktime_add_ns(ideal_time, nsecs);
-//    hrtimer_set_expires(&t->timer, ideal_time);
-//
-//    do {
-//        set_current_state(TASK_INTERRUPTIBLE);
-//        hrtimer_start_expires(&t->timer, HRTIMER_MODE_ABS);
-//
-//        if (likely(t->task))
-//            freezable_schedule();
-//
-//        hrtimer_cancel(&t->timer);
-//
-//    } while (t->task && !signal_pending(current));
-//    __set_current_state(TASK_RUNNING);
-//
-//    return ideal_time;
-//}
-//
-//static int ec_master_operation_thread(void *priv_data)
-//{
-//
-//    ec_master_t *master = (ec_master_t *) priv_data;
-//
-//    struct hrtimer_sleeper t;
-//    ktime_t ideal_time;
-//    s64 actual_time;
-//    hrtimer_init_sleeper(&t, CLOCK_MONOTONIC, HRTIMER_MODE_ABS, current);
-//
-//    ideal_time = t.timer.base->get_time();
-//
-//    EC_MASTER_DBG(master, 1, "Operation thread running"
-//            " with fsm interval = %u us, max data size=%zu\n",
-//            master->send_interval, master->max_queue_size);
-//
-//    while (!kthread_should_stop()) {
-//       //ideal_time = ec_master_nanosleep_test(&t, ideal_time, master->send_interval * 10000);
-//
-//        ec_datagram_output_stats(&master->fsm_datagram);
-//
-//        if (master->injection_seq_rt == master->injection_seq_fsm) {
-//            // output statistics
-//            ec_master_output_stats(master);
-//
-//            // execute master & slave state machines
-//            if (ec_lock_down_interruptible(&master->master_sem)) {
-//                break;
-//            }
-//
-//            if (ec_fsm_master_exec(&master->fsm)) {
-//                // Inject datagrams (let the RT thread queue them, see
-//                // ecrt_master_send())
-//                master->injection_seq_fsm++;
-//            }
-//
-//            // if rt_slave_requests is true and the slaves are available
-//            // this will be handled by the app explicitly calling
-//            // ecrt_master_exec_slave_request()
-//            if (!master->rt_slave_requests || !master->rt_slaves_available) {
-//                ec_master_exec_slave_fsms(master);
-//            }
-//
-//            ec_lock_up(&master->master_sem);
-//        }
-//
-//#ifdef EC_USE_HRTIMER
-//        // the op thread should not work faster than the sending RT thread
-//        // ec_master_nanosleep(master->send_interval * 1000 / 4);
-//        ideal_time = ec_master_nanosleep_test(&t, ideal_time, master->send_interval * 1000 / 2);
-//#else
-//        if (ec_fsm_master_idle(&master->fsm)) {
-//            set_current_state(TASK_INTERRUPTIBLE);
-//            schedule_timeout(1);
-//        }
-//        else {
-//            schedule();
-//        }
-//#endif
-//    }
-//
-//    EC_MASTER_DBG(master, 1, "Master OP thread exiting...\n");
-//    return 0;
-//}
+static int ec_master_operation_thread(void *priv_data)
+{
+    ec_master_t *master = (ec_master_t *) priv_data;
+
+    EC_MASTER_DBG(master, 1, "Operation thread running"
+            " with fsm interval = %u us, max data size=%zu\n",
+            master->send_interval, master->max_queue_size);
+
+    while (!kthread_should_stop()) {
+        ec_datagram_output_stats(&master->fsm_datagram);
+
+        if (master->injection_seq_rt == master->injection_seq_fsm) {
+            // output statistics
+            ec_master_output_stats(master);
+
+            // execute master & slave state machines
+            if (ec_lock_down_interruptible(&master->master_sem)) {
+                break;
+            }
+
+            if (ec_fsm_master_exec(&master->fsm)) {
+                // Inject datagrams (let the RT thread queue them, see
+                // ecrt_master_send())
+                master->injection_seq_fsm++;
+            }
+
+            // if rt_slave_requests is true and the slaves are available
+            // this will be handled by the app explicitly calling
+            // ecrt_master_exec_slave_request()
+            if (!master->rt_slave_requests || !master->rt_slaves_available) {
+                ec_master_exec_slave_fsms(master);
+            }
+
+            ec_lock_up(&master->master_sem);
+        }
+
+#ifdef EC_USE_HRTIMER
+        // the op thread should not work faster than the sending RT thread
+        ec_master_nanosleep(master->send_interval * 1000);
+#else
+        if (ec_fsm_master_idle(&master->fsm)) {
+            set_current_state(TASK_INTERRUPTIBLE);
+            schedule_timeout(1);
+        }
+        else {
+            schedule();
+        }
+#endif
+    }
+
+    EC_MASTER_DBG(master, 1, "Master OP thread exiting...\n");
+    return 0;
+}
 
 /*****************************************************************************/
 
@@ -2917,12 +2883,12 @@ int ecrt_master_activate(ec_master_t *master)
         ec_master_eoe_start(master);
     }
 #endif
-    /*ret = ec_master_thread_start(master, ec_master_operation_thread,
+    ret = ec_master_thread_start(master, ec_master_operation_thread,
                 "EtherCAT-OP");
     if (ret < 0) {
         EC_MASTER_ERR(master, "Failed to start master thread!\n");
         return ret;
-    }*/
+    }
 
     /* Allow scanning after a topology change. */
     master->allow_scan = 1;
@@ -2987,7 +2953,7 @@ void ecrt_master_deactivate(ec_master_t *master)
         return;
     }
 
-//    ec_master_thread_stop(master);
+    ec_master_thread_stop(master);
 #ifdef EC_EOE
     ec_master_eoe_stop(master);
 #endif
@@ -3035,7 +3001,7 @@ void ecrt_master_deactivate(ec_master_t *master)
 
 /*****************************************************************************/
 
-static size_t ecrt_master_send_impl(ec_master_t *master)
+size_t ecrt_master_send(ec_master_t *master)
 {
     ec_datagram_t *datagram, *n;
     ec_device_index_t dev_idx;
@@ -3080,40 +3046,6 @@ static size_t ecrt_master_send_impl(ec_master_t *master)
     }
 
     return sent_bytes;
-}
-
-/*****************************************************************************/
-
-size_t ecrt_master_send(ec_master_t *master)
-{
-  ec_datagram_output_stats(&master->fsm_datagram);
-
-  if (master->injection_seq_rt == master->injection_seq_fsm) {
-    // output statistics
-    ec_master_output_stats(master);
-
-    // execute master & slave state machines
-    //if (ec_lock_down_interruptible(&master->master_sem)) {
-    //    return sent_bytes;
-    //}
-
-    if (ec_fsm_master_exec(&master->fsm)) {
-      // Inject datagrams (let the RT thread queue them, see
-      // ecrt_master_send())
-      master->injection_seq_fsm++;
-    }
-
-    // if rt_slave_requests is true and the slaves are available
-    // this will be handled by the app explicitly calling
-    // ecrt_master_exec_slave_request()
-    if (!master->rt_slave_requests || !master->rt_slaves_available) {
-      ec_master_exec_slave_fsms(master);
-    }
-
-    //ec_lock_up(&master->master_sem);
-  }
-
-  return ecrt_master_send_impl(master);
 }
 
 /*****************************************************************************/
@@ -3182,7 +3114,7 @@ size_t ecrt_master_send_ext(ec_master_t *master)
         ec_master_queue_datagram(master, datagram);
     }
     ec_lock_up(&master->ext_queue_sem);
-    
+
     return ecrt_master_send(master);
 }
 
