@@ -1773,6 +1773,41 @@ void ec_master_nanosleep(const unsigned long nsecs)
     } while (t.task && !signal_pending(current));
 }
 
+/*****************************************************************************/
+
+/** Sleep timer.
+ */
+static ktime_t ec_master_nanosleep_timer(struct hrtimer_sleeper *t, ktime_t ideal_time, const unsigned long nsecs)
+{
+    t->task = current;
+    ideal_time = ktime_add_ns(ideal_time, nsecs);
+    hrtimer_set_expires(&t->timer, ideal_time);
+
+    do {
+        set_current_state(TASK_INTERRUPTIBLE);
+        hrtimer_start_expires(&t->timer, HRTIMER_MODE_ABS);
+
+        if (likely(t->task))
+            freezable_schedule();
+
+        hrtimer_cancel(&t->timer);
+
+    } while (t->task && !signal_pending(current));
+    __set_current_state(TASK_RUNNING);
+
+    return ideal_time;
+}
+
+/*****************************************************************************/
+
+/** Create time with usec precision.
+ */
+static inline ktime_t us_to_ktime(u64 us)
+{
+	static const ktime_t ktime_zero = 0;
+	return ktime_add_us(ktime_zero, us);
+}
+
 #endif // EC_USE_HRTIMER
 
 /*****************************************************************************/
@@ -1951,41 +1986,6 @@ static int ec_master_idle_thread(void *priv_data)
     EC_MASTER_DBG(master, 1, "Master IDLE thread exiting...\n");
 
     return 0;
-}
-
-/*****************************************************************************/
-
-/** Sleep timer.
- */
-static ktime_t ec_master_nanosleep_timer(struct hrtimer_sleeper *t, ktime_t ideal_time, const unsigned long nsecs)
-{
-    t->task = current;
-    ideal_time = ktime_add_ns(ideal_time, nsecs);
-    hrtimer_set_expires(&t->timer, ideal_time);
-
-    do {
-        set_current_state(TASK_INTERRUPTIBLE);
-        hrtimer_start_expires(&t->timer, HRTIMER_MODE_ABS);
-
-        if (likely(t->task))
-            freezable_schedule();
-
-        hrtimer_cancel(&t->timer);
-
-    } while (t->task && !signal_pending(current));
-    __set_current_state(TASK_RUNNING);
-
-    return ideal_time;
-}
-
-/*****************************************************************************/
-
-/** Create time with usec precision.
- */
-static inline ktime_t us_to_ktime(u64 us)
-{
-	static const ktime_t ktime_zero = 0;
-	return ktime_add_us(ktime_zero, us);
 }
 
 /*****************************************************************************/
