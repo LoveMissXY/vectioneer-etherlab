@@ -1994,25 +1994,25 @@ static inline ktime_t us_to_ktime(u64 us)
  */
 static int ec_master_operation_thread(void *priv_data)
 {
-    ec_master_t *master = (ec_master_t *) priv_data;            
+    ec_master_t *master = (ec_master_t *) priv_data;
     struct hrtimer_sleeper t;
     ktime_t ideal_time;
     s64 start_time;
-    
-    
+
+
     EC_MASTER_DBG(master, 1, "Operation thread running"
             " with fsm interval = %u us, max data size=%zu\n",
             master->send_interval, master->max_queue_size);
-    
-    hrtimer_init_sleeper(&t, CLOCK_MONOTONIC, HRTIMER_MODE_ABS, current);     
-    
+
+    hrtimer_init_sleeper(&t, CLOCK_MONOTONIC, HRTIMER_MODE_ABS, current);
+
     // wait till the next millisecond, before entering operation loop
     ideal_time = t.timer.base->get_time();
     start_time = ktime_to_us(ideal_time);
     ideal_time = us_to_ktime(start_time + 1);
     ec_master_nanosleep_timer(&t, ideal_time, 0);
-    
-    
+
+
     while (!kthread_should_stop()) {
         ec_datagram_output_stats(&master->fsm_datagram);
 
