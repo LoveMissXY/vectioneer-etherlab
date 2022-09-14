@@ -43,6 +43,7 @@
 #include <linux/version.h>
 #include <linux/hrtimer.h>
 #include <linux/vmalloc.h>
+#include <linux/freezer.h>
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
 #include <uapi/linux/sched/types.h> // struct sched_param
@@ -1772,6 +1773,41 @@ void ec_master_nanosleep(const unsigned long nsecs)
     } while (t.task && !signal_pending(current));
 }
 
+/*****************************************************************************/
+
+/** Sleep timer.
+ */
+static ktime_t ec_master_nanosleep_timer(struct hrtimer_sleeper *t, ktime_t ideal_time, const unsigned long nsecs)
+{
+    t->task = current;
+    ideal_time = ktime_add_ns(ideal_time, nsecs);
+    hrtimer_set_expires(&t->timer, ideal_time);
+
+    do {
+        set_current_state(TASK_INTERRUPTIBLE);
+        hrtimer_start_expires(&t->timer, HRTIMER_MODE_ABS);
+
+        if (likely(t->task))
+            freezable_schedule();
+
+        hrtimer_cancel(&t->timer);
+
+    } while (t->task && !signal_pending(current));
+    __set_current_state(TASK_RUNNING);
+
+    return ideal_time;
+}
+
+/*****************************************************************************/
+
+/** Create time with usec precision.
+ */
+static inline ktime_t us_to_ktime(u64 us)
+{
+	static const ktime_t ktime_zero = 0;
+	return ktime_add_us(ktime_zero, us);
+}
+
 #endif // EC_USE_HRTIMER
 
 /*****************************************************************************/
@@ -1959,10 +1995,25 @@ static int ec_master_idle_thread(void *priv_data)
 static int ec_master_operation_thread(void *priv_data)
 {
     ec_master_t *master = (ec_master_t *) priv_data;
+#ifdef EC_USE_HRTIMER
+    struct hrtimer_sleeper t;
+    ktime_t ideal_time;
+    s64 start_time;
+#endif
 
     EC_MASTER_DBG(master, 1, "Operation thread running"
             " with fsm interval = %u us, max data size=%zu\n",
             master->send_interval, master->max_queue_size);
+
+#ifdef EC_USE_HRTIMER
+    hrtimer_init_sleeper(&t, CLOCK_MONOTONIC, HRTIMER_MODE_ABS, current);
+
+    // wait till the next millisecond, before entering operation loop
+    ideal_time = t.timer.base->get_time();
+    start_time = ktime_to_us(ideal_time);
+    ideal_time = us_to_ktime(start_time + 1);
+    ec_master_nanosleep_timer(&t, ideal_time, 0);
+#endif
 
     while (!kthread_should_stop()) {
         ec_datagram_output_stats(&master->fsm_datagram);
@@ -1994,7 +2045,8 @@ static int ec_master_operation_thread(void *priv_data)
 
 #ifdef EC_USE_HRTIMER
         // the op thread should not work faster than the sending RT thread
-        ec_master_nanosleep(master->send_interval * 1000);
+        // ec_master_nanosleep(master->send_interval * 1000);
+        ideal_time = ec_master_nanosleep_timer(&t, ideal_time, master->send_interval * 1000);
 #else
         if (ec_fsm_master_idle(&master->fsm)) {
             set_current_state(TASK_INTERRUPTIBLE);
