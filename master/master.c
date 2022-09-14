@@ -1980,7 +1980,7 @@ static ktime_t ec_master_nanosleep_timer(struct hrtimer_sleeper *t, ktime_t idea
 
 /*****************************************************************************/
 
-/** Creat time with usec precision.
+/** Create time with usec precision.
  */
 static inline ktime_t us_to_ktime(u64 us)
 {
@@ -1995,15 +1995,17 @@ static inline ktime_t us_to_ktime(u64 us)
 static int ec_master_operation_thread(void *priv_data)
 {
     ec_master_t *master = (ec_master_t *) priv_data;
+#ifdef EC_USE_HRTIMER
     struct hrtimer_sleeper t;
     ktime_t ideal_time;
     s64 start_time;
-
+#endif
 
     EC_MASTER_DBG(master, 1, "Operation thread running"
             " with fsm interval = %u us, max data size=%zu\n",
             master->send_interval, master->max_queue_size);
 
+#ifdef EC_USE_HRTIMER
     hrtimer_init_sleeper(&t, CLOCK_MONOTONIC, HRTIMER_MODE_ABS, current);
 
     // wait till the next millisecond, before entering operation loop
@@ -2011,7 +2013,7 @@ static int ec_master_operation_thread(void *priv_data)
     start_time = ktime_to_us(ideal_time);
     ideal_time = us_to_ktime(start_time + 1);
     ec_master_nanosleep_timer(&t, ideal_time, 0);
-
+#endif
 
     while (!kthread_should_stop()) {
         ec_datagram_output_stats(&master->fsm_datagram);
