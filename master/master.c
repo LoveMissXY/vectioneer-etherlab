@@ -2006,8 +2006,12 @@ static int ec_master_operation_thread(void *priv_data)
             master->send_interval, master->max_queue_size);
 
 #ifdef EC_USE_HRTIMER
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 0, 0)
     hrtimer_init_sleeper(&t, CLOCK_MONOTONIC, HRTIMER_MODE_ABS, current);
-
+#else
+    hrtimer_init(&t.timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+    hrtimer_init_sleeper(&t, current);
+#endif
     // wait till the next millisecond, before entering operation loop
     ideal_time = t.timer.base->get_time();
     start_time = ktime_to_us(ideal_time);
