@@ -1,14 +1,14 @@
-From ba67915ed253d7452cf90ad15185e8479713a0af Mon Sep 17 00:00:00 2001
+From e1bc41be5f3ec00bb0404bb05f38b298ab5cd8ac Mon Sep 17 00:00:00 2001
 From: Alexey Zakharov <alexey.zakharov@vectioneer.com>
-Date: Wed, 14 Sep 2022 17:54:48 +0200
+Date: Wed, 21 Sep 2022 12:28:51 +0200
 Subject: [PATCH] changed how sleep works in the op thread
 
 ---
- master/master.c | 54 ++++++++++++++++++++++++++++++++++++++++++++++++-
- 1 file changed, 53 insertions(+), 1 deletion(-)
+ master/master.c | 57 ++++++++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 56 insertions(+), 1 deletion(-)
 
 diff --git a/master/master.c b/master/master.c
-index 81420b8e..88b4cf82 100644
+index 81420b8e..a354ef56 100644
 --- a/master/master.c
 +++ b/master/master.c
 @@ -43,6 +43,7 @@
@@ -61,7 +61,7 @@ index 81420b8e..88b4cf82 100644
  #endif // EC_USE_HRTIMER
  
  /*****************************************************************************/
-@@ -1959,11 +1995,26 @@ static int ec_master_idle_thread(void *priv_data)
+@@ -1959,11 +1995,29 @@ static int ec_master_idle_thread(void *priv_data)
  static int ec_master_operation_thread(void *priv_data)
  {
      ec_master_t *master = (ec_master_t *) priv_data;
@@ -76,8 +76,11 @@ index 81420b8e..88b4cf82 100644
              master->send_interval, master->max_queue_size);
  
 +#ifdef EC_USE_HRTIMER
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0)
++    hrtimer_init_sleeper(&t, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
++#else
 +    hrtimer_init_sleeper(&t, CLOCK_MONOTONIC, HRTIMER_MODE_ABS, current);
-+
++#endif
 +    // wait till the next millisecond, before entering operation loop
 +    ideal_time = t.timer.base->get_time();
 +    start_time = ktime_to_us(ideal_time);
@@ -88,7 +91,7 @@ index 81420b8e..88b4cf82 100644
      while (!kthread_should_stop()) {
          ec_datagram_output_stats(&master->fsm_datagram);
  
-@@ -1994,7 +2045,8 @@ static int ec_master_operation_thread(void *priv_data)
+@@ -1994,7 +2048,8 @@ static int ec_master_operation_thread(void *priv_data)
  
  #ifdef EC_USE_HRTIMER
          // the op thread should not work faster than the sending RT thread
