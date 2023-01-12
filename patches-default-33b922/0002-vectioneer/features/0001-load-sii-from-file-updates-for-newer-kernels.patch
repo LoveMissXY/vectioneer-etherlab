@@ -1,14 +1,14 @@
-From 9fd95523df33a12fb835c428a2001ae163a98fd5 Mon Sep 17 00:00:00 2001
+From 92774ff99e255738baf467e937a388db0e1c2809 Mon Sep 17 00:00:00 2001
 From: Mark Verrijt <mark.verrijt@vectioneer.com>
-Date: Fri, 9 Sep 2022 10:49:55 +0200
+Date: Thu, 12 Jan 2023 18:11:28 +0100
 Subject: [PATCH] load sii from file updates for newer kernels
 
 ---
- master/sii_firmware.c | 45 ++++++++++++++++++++++++++++++++++---------
- 1 file changed, 36 insertions(+), 9 deletions(-)
+ master/sii_firmware.c | 51 +++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 42 insertions(+), 9 deletions(-)
 
 diff --git a/master/sii_firmware.c b/master/sii_firmware.c
-index f287222a..8c9789f2 100644
+index f287222a..950a2082 100644
 --- a/master/sii_firmware.c
 +++ b/master/sii_firmware.c
 @@ -58,7 +58,7 @@
@@ -69,7 +69,15 @@ index f287222a..8c9789f2 100644
  
      if (!(firmware->data = kmalloc(firmware->size, GFP_KERNEL))) {
          EC_SLAVE_ERR(slave, "Failed to allocate memory (firmware data).\n");
-@@ -125,8 +136,13 @@ static int request_firmware_direct(
+@@ -119,22 +130,33 @@ static int request_firmware_direct(
+         goto error_firmware;
+     }
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+     // read the firmware (need to temporarily allow access to kernel mem)
+     old_fs = get_fs();
+     set_fs(KERNEL_DS);
++#endif
  
      pos = 0;
      while (pos < firmware->size) {
@@ -81,9 +89,21 @@ index f287222a..8c9789f2 100644
 +                             firmware->size - pos, &pos);
 +#endif
          if (retval < 0) {
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
              set_fs(old_fs);
++#endif
              EC_SLAVE_ERR(slave, "Failed to read firmware (%d).\n", retval);
-@@ -176,12 +192,12 @@ static void firmware_request_complete(const struct firmware *, void *);
+             goto error_firmware_data;
+         }
+     }
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+     set_fs(old_fs);
++#endif
+ 
+     EC_SLAVE_INFO(slave, "SII firmware loaded from file %s.\n", filename);
+     filp_close(filp, NULL);
+@@ -176,12 +198,12 @@ static void firmware_request_complete(const struct firmware *, void *);
  /*****************************************************************************/
  #ifdef EC_SII_DIR
  
@@ -98,7 +118,7 @@ index f287222a..8c9789f2 100644
          firmware_request_complete(fw, ctx);
      } else {
          firmware_request_complete(NULL, ctx);
-@@ -199,7 +215,7 @@ static int start_request(
+@@ -199,7 +221,7 @@ static int start_request(
      struct task_struct *task;
  
      ctx->filename = filename;
@@ -107,7 +127,7 @@ index f287222a..8c9789f2 100644
                         "firmware/%s", filename);
      if (IS_ERR(task)) {
          firmware_request_complete(NULL, ctx);
-@@ -240,10 +256,11 @@ static int start_request(
+@@ -240,10 +262,11 @@ static int start_request(
          // register a child device for the slave, because only one
          // firmware request can be in flight per device.
          device_initialize(&ctx->fw_device);
@@ -120,7 +140,7 @@ index f287222a..8c9789f2 100644
  
          error = device_add(&ctx->fw_device);
          if (error) {
-@@ -312,6 +329,15 @@ void ec_request_sii_firmware(
+@@ -312,6 +335,15 @@ void ec_request_sii_firmware(
          goto out_error;
      }
  
@@ -136,7 +156,7 @@ index f287222a..8c9789f2 100644
      sprintf(ctx->filename_vendor_product, "ethercat/ec_%08x_%08x.bin",
              slave->sii_image->sii.vendor_id,
              slave->sii_image->sii.product_code);
-@@ -319,6 +345,7 @@ void ec_request_sii_firmware(
+@@ -319,6 +351,7 @@ void ec_request_sii_firmware(
              slave->sii_image->sii.vendor_id,
              slave->sii_image->sii.product_code,
              slave->sii_image->sii.revision_number);
