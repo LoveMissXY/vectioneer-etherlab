@@ -58,7 +58,7 @@
    Request firmware direct from file.
  */
 
-static int request_firmware_direct(
+static int sii_request_firmware_direct(
        ec_slave_t *slave,
        const char *filename,
        struct firmware **out_firmware
@@ -71,6 +71,7 @@ static int request_firmware_direct(
 
     int              retval = 0;
     struct file     *filp;
+    struct dentry   *dentry = NULL;
     struct firmware *firmware;
     umode_t          permission;
     mm_segment_t     old_fs;
@@ -82,18 +83,28 @@ static int request_firmware_direct(
     if (strlen(filename) + 14 >= 256)   // Sanity check.
         return -EFAULT;
 
-    EC_SLAVE_DBG(slave, 1, "request_firmware_direct: %s.\n", filename);
+    EC_SLAVE_DBG(slave, 1, "sii_request_firmware_direct: %s.\n", filename);
     sprintf(pathname, EC_SII_DIR "/%s", filename);
 
     // does the file exist?
     filp = filp_open(pathname, 0, O_RDONLY);
-    if ((IS_ERR(filp)) || (filp == NULL) || (filp->f_dentry == NULL)) {
+    if ((IS_ERR(filp)) || (filp == NULL)) {
+        retval = -ENOENT;
+        goto out;
+    } else {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 19, 0)
+        dentry = filp->f_dentry;
+#else
+        dentry = filp->f_path.dentry;
+#endif
+    }
+    if (dentry == NULL) {
         retval = -ENOENT;
         goto out;
     }
 
     // must have correct permissions
-    permission = filp->f_dentry->d_inode->i_mode;
+    permission = dentry->d_inode->i_mode;
     if ((permission & permreqd) != permreqd) {
         EC_SLAVE_WARN(slave, "Firmware %s not readable.\n", filename);
         retval = -EPERM;
@@ -111,7 +122,7 @@ static int request_firmware_direct(
         retval = -ENOMEM;
         goto error_file;
     }
-    firmware->size = filp->f_dentry->d_inode->i_size;
+    firmware->size = dentry->d_inode->i_size;
 
     if (!(firmware->data = kmalloc(firmware->size, GFP_KERNEL))) {
         EC_SLAVE_ERR(slave, "Failed to allocate memory (firmware data).\n");
@@ -119,22 +130,33 @@ static int request_firmware_direct(
         goto error_firmware;
     }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
     // read the firmware (need to temporarily allow access to kernel mem)
     old_fs = get_fs();
     set_fs(KERNEL_DS);
+#endif
 
     pos = 0;
     while (pos < firmware->size) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
         retval = vfs_read(filp, (char __user *) firmware->data + pos,
                           firmware->size - pos, &pos);
+#else
+        retval = kernel_read(filp, (char __user *) firmware->data + pos,
+                             firmware->size - pos, &pos);
+#endif
         if (retval < 0) {
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
             set_fs(old_fs);
+#endif
             EC_SLAVE_ERR(slave, "Failed to read firmware (%d).\n", retval);
             goto error_firmware_data;
         }
     }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
     set_fs(old_fs);
+#endif
 
     EC_SLAVE_INFO(slave, "SII firmware loaded from file %s.\n", filename);
     filp_close(filp, NULL);
@@ -176,12 +198,12 @@ static void firmware_request_complete(const struct firmware *, void *);
 /*****************************************************************************/
 #ifdef EC_SII_DIR
 
-static int request_firmware_direct_work_func(void *arg)
+static int sii_request_firmware_direct_work_func(void *arg)
 {
     struct firmware_request_context *ctx = arg;
     struct firmware *fw = NULL;
 
-    if (request_firmware_direct(ctx->slave, ctx->filename, &fw) == 0) {
+    if (sii_request_firmware_direct(ctx->slave, ctx->filename, &fw) == 0) {
         firmware_request_complete(fw, ctx);
     } else {
         firmware_request_complete(NULL, ctx);
@@ -199,7 +221,7 @@ static int start_request(
     struct task_struct *task;
 
     ctx->filename = filename;
-    task = kthread_run(request_firmware_direct_work_func, ctx,
+    task = kthread_run(sii_request_firmware_direct_work_func, ctx,
                        "firmware/%s", filename);
     if (IS_ERR(task)) {
         firmware_request_complete(NULL, ctx);
@@ -240,10 +262,11 @@ static int start_request(
         // register a child device for the slave, because only one
         // firmware request can be in flight per device.
         device_initialize(&ctx->fw_device);
-        dev_set_name(&ctx->fw_device, "addr%u", ctx->slave->station_address);
+        dev_set_name(&ctx->fw_device, "%u-%u", ctx->slave->master->index, ctx->slave->ring_position);
         dev_set_uevent_suppress(&ctx->fw_device, true);
         ctx->fw_device.parent = ctx->slave->master->class_device;
         ctx->fw_device.release = fw_device_release;
+        ctx->fw_device.class = ctx->slave->master->class_device->class;
 
         error = device_add(&ctx->fw_device);
         if (error) {
@@ -312,6 +335,15 @@ void ec_request_sii_firmware(
         goto out_error;
     }
 
+#ifdef EC_SII_DIR
+    sprintf(ctx->filename_vendor_product, "ec_%08x_%08x.bin",
+            slave->sii_image->sii.vendor_id,
+            slave->sii_image->sii.product_code);
+    sprintf(ctx->filename_vendor_product_revision, "ec_%08x_%08x_%08x.bin",
+            slave->sii_image->sii.vendor_id,
+            slave->sii_image->sii.product_code,
+            slave->sii_image->sii.revision_number);
+#else
     sprintf(ctx->filename_vendor_product, "ethercat/ec_%08x_%08x.bin",
             slave->sii_image->sii.vendor_id,
             slave->sii_image->sii.product_code);
@@ -319,6 +351,7 @@ void ec_request_sii_firmware(
             slave->sii_image->sii.vendor_id,
             slave->sii_image->sii.product_code,
             slave->sii_image->sii.revision_number);
+#endif
     ctx->slave = slave;
     ctx->cont = cont;
     ctx->context = context;
