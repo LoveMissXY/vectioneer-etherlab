@@ -3314,6 +3314,44 @@ static ATTRIBUTES int ec_ioctl_sc_sdo(
 
 /*****************************************************************************/
 
+#ifdef EC_EOE
+/** Configures EoE.
+ *
+ * \return Zero on success, otherwise a negative error code.
+ */
+static ATTRIBUTES int ec_ioctl_sc_eoe(
+        ec_master_t *master, /**< EtherCAT master. */
+        void *arg, /**< ioctl() argument. */
+        ec_ioctl_context_t *ctx /**< Private data structure of file handle. */
+)
+{
+    ec_ioctl_sc_eoe_t data;
+    ec_slave_config_t *sc;
+
+    if (unlikely(!ctx->requested))
+        return -EPERM;
+
+    if (copy_from_user(&data, (void __user *) arg, sizeof(data)))
+    return -EFAULT;
+
+    if (ec_lock_down_interruptible(&master->master_sem))
+        return -EINTR;
+
+    if (!(sc = ec_master_get_config(master, data.config_index))) {
+        ec_lock_up(&master->master_sem);
+        return -ENOENT;
+    }
+
+    ec_lock_up(&master->master_sem); /** \todo sc could be invalidated */
+
+    return ecrt_slave_config_eoe(sc, data.mac_address, data.ip_address,
+                data.subnet_mask, data.gateway, data.dns, data.name);
+
+}
+#endif
+
+/*****************************************************************************/
+
 /** Set the emergency ring buffer size.
  *
  * \return Zero on success, otherwise a negative error code.
@@ -6316,6 +6354,13 @@ long EC_IOCTL(
                 break;
             }
             ret = ec_ioctl_eoe_delif(master, arg, ctx);
+            break;
+        case EC_IOCTL_SC_EOE:
+            if (!ctx->writable) {
+                ret = -EPERM;
+                break;
+            }
+            ret = ec_ioctl_sc_eoe(master, arg, ctx);
             break;
 #endif
         case EC_IOCTL_MBOX_GATEWAY:

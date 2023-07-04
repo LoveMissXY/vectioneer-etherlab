@@ -92,6 +92,9 @@ void ec_slave_config_init(
     INIT_LIST_HEAD(&sc->voe_handlers);
     INIT_LIST_HEAD(&sc->soe_configs);
     INIT_LIST_HEAD(&sc->soe_requests);
+#ifdef EC_EOE
+    INIT_LIST_HEAD(&sc->eoe_configs);
+#endif
     ec_coe_emerg_ring_init(&sc->emerg_ring, sc);
 }
 
@@ -111,6 +114,9 @@ void ec_slave_config_clear(
     ec_voe_handler_t *voe, *next_voe;
     ec_reg_request_t *reg, *next_reg;
     ec_soe_request_t *soe, *next_soe;
+#ifdef EC_EOE
+    ec_eoe_request_t *eoe, *next_eoe;
+#endif
 
     ec_slave_config_detach(sc);
 
@@ -166,6 +172,14 @@ void ec_slave_config_clear(
         ec_soe_request_clear(soe);
         kfree(soe);
     }
+
+#ifdef EC_EOE
+    // free all EoE configurations
+    list_for_each_entry_safe(eoe, next_eoe, &sc->eoe_configs, list) {
+        list_del(&eoe->list);
+        kfree(eoe);
+    }
+#endif
 
     ec_coe_emerg_ring_clear(&sc->emerg_ring);
 }
@@ -1539,6 +1553,69 @@ int ecrt_slave_config_idn(ec_slave_config_t *sc, uint8_t drive_no,
 
 /*****************************************************************************/
 
+#ifdef EC_EOE
+int ecrt_slave_config_eoe(ec_slave_config_t *sc,
+        const unsigned char mac_address[ETH_ALEN],
+        uint32_t ip_address, uint32_t subnet_mask,
+        uint32_t gateway, uint32_t dns, const char* name)
+{
+    ec_slave_t *slave = sc->slave;
+    ec_eoe_request_t *req;
+    int cnt;
+
+    EC_CONFIG_DBG(sc, 1, "%s(sc = 0x%p, mac = %pM, ip = %pI4, "
+                         "netmask = %pI4, gw = %pI4, dns = %pI4, "
+                         "name = %s)\n",
+                  __func__, sc, mac_address, &ip_address, &subnet_mask,
+                  &gateway, &dns, name);
+
+    if (slave && slave->sii_image && !(slave->sii_image->sii.mailbox_protocols & EC_MBOX_EOE)) {
+        EC_CONFIG_WARN(sc, "Attached slave does not support EoE!\n");
+    }
+
+    if (!(req = (ec_eoe_request_t *)
+            kmalloc(sizeof(ec_eoe_request_t), GFP_KERNEL))) {
+        EC_CONFIG_ERR(sc, "Failed to allocate memory for"
+                          " EoE configuration!\n");
+        return -ENOMEM;
+    }
+
+    ec_eoe_request_init(req);
+
+    memcpy(req->mac_address, mac_address, ETH_ALEN);
+    cnt = 0;
+    req->mac_address_included = 0;
+    while (req->mac_address_included == 0 && cnt < ETH_ALEN) {
+        req->mac_address_included = (mac_address[cnt] != 0) ? 1 : 0;
+        ++cnt;
+    }
+
+    req->ip_address = ip_address;
+    req->ip_address_included = ip_address != 0;
+
+    req->subnet_mask = subnet_mask;
+    req->subnet_mask_included = subnet_mask != 0;
+
+    req->gateway = gateway;
+    req->gateway_included = gateway != 0;
+
+    req->dns = dns;
+    req->dns_included = dns != 0;
+
+    strncpy(req->name, name, sizeof(req->name));
+    req->name[sizeof(req->name)-1] = 0;
+    req->name_included = req->name[0] != 0;
+
+    ec_lock_down(&sc->master->master_sem);
+    list_add_tail(&req->list, &sc->eoe_configs);
+    ec_lock_up(&sc->master->master_sem);
+
+    return 0;
+}
+#endif
+
+/*****************************************************************************/
+
 /** \cond */
 
 EXPORT_SYMBOL(ecrt_slave_config_sync_manager);
@@ -1566,6 +1643,9 @@ EXPORT_SYMBOL(ecrt_slave_config_create_voe_handler);
 EXPORT_SYMBOL(ecrt_slave_config_create_reg_request);
 EXPORT_SYMBOL(ecrt_slave_config_state);
 EXPORT_SYMBOL(ecrt_slave_config_idn);
+#ifdef EC_EOE
+EXPORT_SYMBOL(ecrt_slave_config_eoe);
+#endif
 
 /** \endcond */
 

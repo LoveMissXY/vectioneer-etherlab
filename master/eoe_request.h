@@ -38,7 +38,7 @@
 #define __EC_EOE_REQUEST_H__
 
 #include <linux/list.h>
-#include <linux/etherdevice.h> // ETH_ALEN
+#include <linux/if_ether.h> // ETH_ALEN
 
 #include "globals.h"
 
@@ -71,6 +71,8 @@ typedef struct {
 /*****************************************************************************/
 
 void ec_eoe_request_init(ec_eoe_request_t *);
+void ec_eoe_request_copy(ec_eoe_request_t *, const ec_eoe_request_t *);
+void ec_eoe_request_write(ec_eoe_request_t *);
 
 /*****************************************************************************/
 

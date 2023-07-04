@@ -764,7 +764,7 @@ void ecrt_master_receive(ec_master_t *master)
 
 /****************************************************************************/
 
-#if defined(EC_RTDM) && (EC_EOE)
+#if defined(EC_RTDM) && defined(EC_EOE)
 
 size_t ecrt_master_send_ext(ec_master_t *master)
 {
@@ -814,10 +814,9 @@ int ecrt_master_eoe_process(ec_master_t *master)
 
 /****************************************************************************/
 
-#ifdef EC_EOE
-
 int ecrt_master_eoe_addif(ec_master_t *master, uint16_t alias, uint16_t posn)
 {
+#ifdef EC_EOE
     int ret;
     ec_ioctl_eoe_if_t data;
     data.alias = alias;
@@ -830,12 +829,17 @@ int ecrt_master_eoe_addif(ec_master_t *master, uint16_t alias, uint16_t posn)
     }
 
     return ret;
+#else
+    EC_PRINT_ERR("Failed to add EoE interface: EoE not available\n");
+    return -ENOPROTOOPT;
+#endif
 }
 
 /****************************************************************************/
 
 int ecrt_master_eoe_delif(ec_master_t *master, uint16_t alias, uint16_t posn)
 {
+#ifdef EC_EOE
     int ret;
     ec_ioctl_eoe_if_t data;
     data.alias = alias;
@@ -843,14 +847,16 @@ int ecrt_master_eoe_delif(ec_master_t *master, uint16_t alias, uint16_t posn)
 
     ret = ioctl(master->fd, EC_IOCTL_EOE_DELIF, &data);
     if (EC_IOCTL_IS_ERROR(ret)) {
-        EC_PRINT_ERR("Failed to add EoE interface: %s\n",
+        EC_PRINT_ERR("Failed to delete EoE interface: %s\n",
                 strerror(EC_IOCTL_ERRNO(ret)));
     }
 
     return ret;
-}
-
+#else
+    EC_PRINT_ERR("Failed to delete EoE interface: EoE not available\n");
+    return -ENOPROTOOPT;
 #endif
+}
 
 /****************************************************************************/
 

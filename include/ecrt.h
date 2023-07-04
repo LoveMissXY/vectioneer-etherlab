@@ -130,6 +130,8 @@
 #include <sys/time.h> // for struct timeval
 #endif
 
+#include <linux/if_ether.h> // for ETH_ALEN
+
 /******************************************************************************
  * Global definitions
  *****************************************************************************/
@@ -194,6 +196,10 @@
 /** Defined if the method ecrt_master_sync_reference_clock_to() is available.
  */
 #define EC_HAVE_SYNC_TO
+
+/** Defined if the method ecrt_slave_config_eoe() is available.
+ */
+#define EC_HAVE_SLAVE_CONFIG_EOE
 
 /*****************************************************************************/
 
@@ -1156,7 +1162,7 @@ size_t ecrt_master_send_ext(
         ec_master_t *master /**< EtherCAT master. */
         );
 
-#if !defined(__KERNEL__) && defined(EC_RTDM) && (EC_EOE)
+#if !defined(__KERNEL__) && defined(EC_RTDM) && defined(EC_EOE)
 
 /** check if there are any open eoe handlers
  *
@@ -1193,10 +1199,9 @@ int ecrt_master_eoe_process(
         ec_master_t *master /**< EtherCAT master. */
         );
 
-#endif /* !defined(__KERNEL__) && defined(EC_RTDM) && (EC_EOE) */
+#endif /* !defined(__KERNEL__) && defined(EC_RTDM) && defined(EC_EOE) */
 
-#ifdef EC_EOE
-
+#if !defined(__KERNEL__) || defined(EC_EOE)
 /** add an EOE network interface
  *
  * \return 0 on success else negative error code
@@ -1216,8 +1221,7 @@ int ecrt_master_eoe_delif(
         uint16_t alias, /**< slave alias. */
         uint16_t posn /**< slave position. */
         );
-
-#endif /* EC_EOE */
+#endif /* !defined(__KERNEL__) || defined(EC_EOE) */
 
 /** Reads the current master state.
  *
@@ -1719,6 +1723,25 @@ void ecrt_slave_config_dc(
         uint32_t sync1_cycle, /**< SYNC1 cycle time [ns]. */
         int32_t sync1_shift /**< SYNC1 shift time [ns]. */
         );
+
+#if !defined(__KERNEL__) || defined(EC_EOE)
+/** Add an EoE configuration.
+ *
+ * An EoE Configuration is stored in the slave configuration and is
+ * downloaded to the slave whenever the slave is being configured by the
+ * master. This usually happens once on master activation, but can be repeated
+ * subsequently, for example after the slave's power supply failed.
+ */
+int ecrt_slave_config_eoe(
+        ec_slave_config_t *sc, /**< Slave configuration. */
+        const unsigned char mac_address[ETH_ALEN], /**< MAC Address. */
+        uint32_t ip_address, /**< IP address in network byte order. */
+        uint32_t subnet_mask, /**< Subnet mask in network byte order. */
+        uint32_t gateway, /**< (Default) Gateway in network byte order. */
+        uint32_t dns, /**< DNS Server in network byte order. */
+        const char* name /**< DNS Name. */
+        );
+#endif /* !defined(__KERNEL__) || defined(EC_EOE) */
 
 /** Add an SDO configuration.
  *

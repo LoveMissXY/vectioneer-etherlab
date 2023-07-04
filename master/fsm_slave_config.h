@@ -57,6 +57,9 @@ struct ec_fsm_slave_config
     ec_fsm_change_t *fsm_change; /**< State change state machine. */
     ec_fsm_coe_t *fsm_coe; /**< CoE state machine. */
     ec_fsm_soe_t *fsm_soe; /**< SoE state machine. */
+#ifdef EC_EOE
+    ec_fsm_eoe_t *fsm_eoe; /**< EoE state machine. */
+#endif
     ec_fsm_pdo_t *fsm_pdo; /**< PDO configuration state machine. */
 
     ec_slave_t *slave; /**< Slave the FSM runs on. */
@@ -66,6 +69,10 @@ struct ec_fsm_slave_config
     ec_sdo_request_t request_copy; /**< Copied SDO request. */
     ec_soe_request_t *soe_request; /**< SDO request for SDO configuration. */
     ec_soe_request_t soe_request_copy; /**< Copied SDO request. */
+#ifdef EC_EOE
+    ec_eoe_request_t *eoe_request; /**< EoE request for EoE configuration. */
+    ec_eoe_request_t eoe_request_copy; /**< Copied EoE request. */
+#endif
     unsigned long last_diff_ms; /**< For sync reporting. */
     unsigned long jiffies_start; /**< For timeout calculations. */
     unsigned int take_time; /**< Store jiffies after datagram reception. */
@@ -75,6 +82,9 @@ struct ec_fsm_slave_config
 
 void ec_fsm_slave_config_init(ec_fsm_slave_config_t *, ec_slave_t *,
         ec_fsm_change_t *, ec_fsm_coe_t *, ec_fsm_soe_t *, ec_fsm_pdo_t *);
+#ifdef EC_EOE
+void ec_fsm_slave_config_init_eoe(ec_fsm_slave_config_t *, ec_fsm_eoe_t *);
+#endif
 void ec_fsm_slave_config_clear(ec_fsm_slave_config_t *);
 
 void ec_fsm_slave_config_start(ec_fsm_slave_config_t *);

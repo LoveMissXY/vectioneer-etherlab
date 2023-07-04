@@ -69,3 +69,37 @@ void ec_eoe_request_init(
 }
 
 /*****************************************************************************/
+
+/** Copy another EoE request.
+ */
+
+void ec_eoe_request_copy(
+        ec_eoe_request_t *req, /**< EoE request. */
+        const ec_eoe_request_t *other /**< Other EoE request to copy from. */
+)
+{
+    req->mac_address_included = other->mac_address_included;
+    req->ip_address_included = other->ip_address_included;
+    req->subnet_mask_included = other->subnet_mask_included;
+    req->gateway_included = other->gateway_included;
+    req->dns_included = other->dns_included;
+    req->name_included = other->name_included;
+
+    memcpy(req->mac_address, other->mac_address, ETH_ALEN);
+    req->ip_address = other->ip_address;
+    req->subnet_mask = other->subnet_mask;
+    req->gateway = other->gateway;
+    req->dns = other->dns;
+    memcpy(req->name, other->name, EC_MAX_HOSTNAME_SIZE);
+}
+
+/*****************************************************************************/
+
+void ec_eoe_request_write(ec_eoe_request_t *req)
+{
+    req->state = EC_INT_REQUEST_QUEUED;
+    req->jiffies_sent = jiffies;
+
+    req->result = 0x0000;
+}
+

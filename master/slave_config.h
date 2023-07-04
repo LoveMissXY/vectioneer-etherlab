@@ -149,6 +149,9 @@ struct ec_slave_config {
     struct list_head reg_requests; /**< List of register requests. */
     struct list_head soe_configs; /**< List of SoE configurations. */
     struct list_head soe_requests; /**< List of SOE requests. */
+#ifdef EC_EOE
+    struct list_head eoe_configs; /**< List of EoE configurations. */
+#endif
 
     ec_coe_emerg_ring_t emerg_ring; /**< CoE emergency ring buffer. */
 };

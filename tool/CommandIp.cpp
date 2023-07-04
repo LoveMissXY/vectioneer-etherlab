@@ -157,11 +157,11 @@ void CommandIp::execute(const StringVector &args)
 
 /*****************************************************************************/
 
-void CommandIp::parseMac(unsigned char mac[EC_ETH_ALEN], const string &str)
+void CommandIp::parseMac(unsigned char mac[ETH_ALEN], const string &str)
 {
     unsigned int pos = 0;
 
-    for (unsigned int i = 0; i < EC_ETH_ALEN; i++) {
+    for (unsigned int i = 0; i < ETH_ALEN; i++) {
         if (pos + 2 > str.size()) {
             stringstream err;
             err << "Incomplete MAC address!";

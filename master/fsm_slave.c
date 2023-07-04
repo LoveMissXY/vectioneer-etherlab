@@ -106,6 +106,9 @@ void ec_fsm_slave_init(
     ec_fsm_change_init(&fsm->fsm_change);
     ec_fsm_slave_config_init(&fsm->fsm_slave_config, fsm->slave,
             &fsm->fsm_change, &fsm->fsm_coe, &fsm->fsm_soe, &fsm->fsm_pdo);
+#ifdef EC_EOE
+    ec_fsm_slave_config_init_eoe(&fsm->fsm_slave_config, &fsm->fsm_eoe);
+#endif
     ec_fsm_slave_scan_init(&fsm->fsm_slave_scan, fsm->slave,
             &fsm->fsm_slave_config, &fsm->fsm_pdo);
 }

@@ -437,6 +437,40 @@ int ecrt_slave_config_sdo(ec_slave_config_t *sc, uint16_t index,
 
 /*****************************************************************************/
 
+int ecrt_slave_config_eoe(ec_slave_config_t *sc,
+        const unsigned char mac_address[ETH_ALEN],
+        uint32_t ip_address, uint32_t subnet_mask,
+        uint32_t gateway, uint32_t dns, const char* name)
+{
+#ifdef EC_EOE
+    ec_ioctl_sc_eoe_t data;
+    int ret;
+
+    data.config_index = sc->index;
+    memcpy(data.mac_address, mac_address, ETH_ALEN);
+    data.ip_address = ip_address;
+    data.subnet_mask = subnet_mask;
+    data.gateway = gateway;
+    data.dns = dns;
+    strncpy(data.name, name, sizeof(data.name));
+    data.name[sizeof(data.name)-1] = 0;
+
+    ret = ioctl(sc->master->fd, EC_IOCTL_SC_EOE, &data);
+    if (EC_IOCTL_IS_ERROR(ret)) {
+        EC_PRINT_ERR("Failed to configure EoE: %s\n",
+                     strerror(EC_IOCTL_ERRNO(ret)));
+        return -EC_IOCTL_ERRNO(ret);
+    }
+
+    return 0;
+#else
+    EC_PRINT_ERR("Failed to configure EoE: EoE not available\n");
+    return -ENOPROTOOPT;
+#endif
+}
+
+/*****************************************************************************/
+
 int ecrt_slave_config_complete_sdo(ec_slave_config_t *sc, uint16_t index,
         const uint8_t *sdo_data, size_t size)
 {

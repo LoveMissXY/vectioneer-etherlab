@@ -39,6 +39,10 @@
 
 #include <linux/ioctl.h>
 
+#ifdef EC_EOE
+#include <linux/if_ether.h>
+#endif
+
 #include "globals.h"
 
 /*****************************************************************************/
@@ -175,7 +179,7 @@
 #define EC_IOCTL_RT_SLAVE_REQUESTS     EC_IOW(0x6b, uint32_t)
 #define EC_IOCTL_EXEC_SLAVE_REQUESTS    EC_IO(0x6c)
 
-#if defined(EC_RTDM) && (EC_EOE)
+#if defined(EC_RTDM) && defined(EC_EOE)
 #define EC_IOCTL_EOE_IS_OPEN            EC_IO(0x6d)
 #define EC_IOCTL_EOE_PROCESS            EC_IO(0x6e)
 #define EC_IOCTL_SEND_EXT               EC_IO(0x6f)
@@ -197,6 +201,10 @@
 #define EC_IOCTL_SOE_REQUEST_WRITE    EC_IOWR(0x83, ec_ioctl_soe_request_t)
 #define EC_IOCTL_SOE_REQUEST_DATA     EC_IOWR(0x84, ec_ioctl_soe_request_t)
 #define EC_IOCTL_SOE_REQUEST_IDN      EC_IOWR(0x85, ec_ioctl_soe_request_t)
+
+#ifdef EC_EOE
+#define EC_IOCTL_SC_EOE               EC_IOW(0x86, ec_ioctl_sc_eoe_t)
+#endif
 
 /*****************************************************************************/
 
@@ -670,13 +678,6 @@ typedef struct {
 
 /*****************************************************************************/
 
-#define EC_ETH_ALEN 6
-#ifdef ETH_ALEN
-#if ETH_ALEN != EC_ETH_ALEN
-#error Ethernet address length mismatch
-#endif
-#endif
-
 #ifdef EC_EOE
 typedef struct {
     // input
@@ -689,7 +690,7 @@ typedef struct {
     uint8_t dns_included;
     uint8_t name_included;
 
-    unsigned char mac_address[EC_ETH_ALEN];
+    unsigned char mac_address[ETH_ALEN];
     uint32_t ip_address;
     uint32_t subnet_mask;
     uint32_t gateway;
@@ -792,6 +793,21 @@ typedef struct {
     const uint8_t *data;
     size_t size;
 } ec_ioctl_sc_idn_t;
+
+/*****************************************************************************/
+
+#ifdef EC_EOE
+typedef struct {
+    // inputs
+    uint32_t config_index;
+    unsigned char mac_address[ETH_ALEN];
+    uint32_t ip_address;
+    uint32_t subnet_mask;
+    uint32_t gateway;
+    uint32_t dns;
+    char name[EC_MAX_HOSTNAME_SIZE];
+} ec_ioctl_sc_eoe_t;
+#endif
 
 /*****************************************************************************/
 

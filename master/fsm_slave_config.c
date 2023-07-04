@@ -115,6 +115,11 @@ void ec_fsm_slave_config_state_error(ec_fsm_slave_config_t *, ec_datagram_t *);
 
 void ec_fsm_slave_config_reconfigure(ec_fsm_slave_config_t *, ec_datagram_t *);
 
+#ifdef EC_EOE
+void ec_fsm_slave_config_state_eoe_conf_preop(ec_fsm_slave_config_t *, ec_datagram_t *);
+void ec_fsm_slave_config_enter_eoe_conf_preop(ec_fsm_slave_config_t *, ec_datagram_t *);
+#endif
+
 /*****************************************************************************/
 
 /** Constructor.
@@ -138,6 +143,20 @@ void ec_fsm_slave_config_init(
     fsm->fsm_soe = fsm_soe;
     fsm->fsm_pdo = fsm_pdo;
 }
+
+/*****************************************************************************/
+
+#ifdef EC_EOE
+/** Constructor Extension for EoE.
+ */
+void ec_fsm_slave_config_init_eoe(
+        ec_fsm_slave_config_t *fsm, /**< slave state machine */
+        ec_fsm_eoe_t *fsm_eoe /**< EoE state machine to use. */
+        )
+{
+    fsm->fsm_eoe = fsm_eoe;
+}
+#endif
 
 /*****************************************************************************/
 
@@ -943,7 +962,11 @@ void ec_fsm_slave_config_enter_soe_conf_preop(
     }
 
     // No SoE configuration to be applied in PREOP
+#ifdef EC_EOE
+    ec_fsm_slave_config_enter_eoe_conf_preop(fsm, datagram);
+#else
     ec_fsm_slave_config_enter_pdo_conf(fsm, datagram);
+#endif
 }
 
 /*****************************************************************************/
@@ -988,8 +1011,88 @@ void ec_fsm_slave_config_state_soe_conf_preop(
     }
 
     // All PREOP IDNs are now configured.
+#ifdef EC_EOE
+    ec_fsm_slave_config_enter_eoe_conf_preop(fsm, datagram);
+#else
+    ec_fsm_slave_config_enter_pdo_conf(fsm, datagram);
+#endif
+}
+
+/*****************************************************************************/
+
+#ifdef EC_EOE
+
+/** Check for EoE configurations to be applied.
+ */
+void ec_fsm_slave_config_enter_eoe_conf_preop(
+        ec_fsm_slave_config_t *fsm, /**< slave state machine */
+        ec_datagram_t *datagram /**< Datagram to use. */
+)
+{
+    ec_slave_t *slave = fsm->slave;
+
+    if (!slave->config) {
+        ec_fsm_slave_config_enter_pdo_sync(fsm, datagram);
+        return;
+    }
+
+    // No EoE configuration to be applied?
+    if (list_empty(&slave->config->eoe_configs)) { // skip EoE configuration
+        ec_fsm_slave_config_enter_pdo_sync(fsm, datagram);
+        return;
+    }
+
+    // start EoE configuration
+    fsm->state = ec_fsm_slave_config_state_eoe_conf_preop;
+    fsm->eoe_request = list_entry(fsm->slave->config->eoe_configs.next,
+            ec_eoe_request_t, list);
+    ec_eoe_request_copy(&fsm->eoe_request_copy, fsm->eoe_request);
+    ec_eoe_request_write(&fsm->eoe_request_copy);
+    ec_fsm_eoe_set_ip_param(fsm->fsm_eoe, fsm->slave, &fsm->eoe_request_copy);
+    ec_fsm_eoe_exec(fsm->fsm_eoe, datagram); // execute immediately
+}
+
+/*****************************************************************************/
+
+/** Slave configuration state: EOE_CONF.
+ */
+void ec_fsm_slave_config_state_eoe_conf_preop(
+        ec_fsm_slave_config_t *fsm, /**< slave state machine */
+        ec_datagram_t *datagram /**< Datagram to use. */
+)
+{
+    if (ec_fsm_eoe_exec(fsm->fsm_eoe, datagram)) {
+        return;
+    }
+
+    if (!ec_fsm_eoe_success(fsm->fsm_eoe)) {
+        EC_SLAVE_ERR(fsm->slave, "EoE configuration failed.\n");
+        fsm->slave->error_flag = 1;
+        fsm->state = ec_fsm_slave_config_state_error;
+        return;
+    }
+
+    if (!fsm->slave->config) { // config removed in the meantime
+        ec_fsm_slave_config_reconfigure(fsm, datagram);
+        return;
+    }
+
+    // Another EoE to configure?
+    if (fsm->eoe_request->list.next != &fsm->slave->config->eoe_configs) {
+        fsm->eoe_request = list_entry(fsm->eoe_request->list.next,
+                ec_eoe_request_t, list);
+        ec_eoe_request_copy(&fsm->eoe_request_copy, fsm->eoe_request);
+        ec_eoe_request_write(&fsm->eoe_request_copy);
+        ec_fsm_eoe_set_ip_param(fsm->fsm_eoe, fsm->slave, &fsm->eoe_request_copy);
+        ec_fsm_eoe_exec(fsm->fsm_eoe, datagram); // execute immediately
+        return;
+    }
+
+    // All EoE are now configured.
     ec_fsm_slave_config_enter_pdo_conf(fsm, datagram);
 }
+
+#endif
 
 /*****************************************************************************/
 
