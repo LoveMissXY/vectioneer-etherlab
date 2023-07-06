@@ -1,0 +1,760 @@
+From 35a0bab5891bd20f5e734a4ac4e03eb9fce9dcc3 Mon Sep 17 00:00:00 2001
+From: Mark Verrijt <mark.verrijt@vectioneer.com>
+Date: Tue, 4 Jul 2023 12:54:00 +0200
+Subject: [PATCH] EoE slave config and EoE improvements
+
+---
+ include/ecrt.h            |  35 ++++++++++---
+ lib/master.c              |  18 ++++---
+ lib/slave_config.c        |  34 +++++++++++++
+ master/eoe_request.c      |  34 +++++++++++++
+ master/eoe_request.h      |   4 +-
+ master/fsm_slave.c        |   3 ++
+ master/fsm_slave_config.c | 103 ++++++++++++++++++++++++++++++++++++++
+ master/fsm_slave_config.h |  10 ++++
+ master/ioctl.c            |  45 +++++++++++++++++
+ master/ioctl.h            |  34 +++++++++----
+ master/slave_config.c     |  80 +++++++++++++++++++++++++++++
+ master/slave_config.h     |   3 ++
+ tool/CommandIp.cpp        |   4 +-
+ 13 files changed, 383 insertions(+), 24 deletions(-)
+
+diff --git a/include/ecrt.h b/include/ecrt.h
+index a6667672..519e21ad 100644
+--- a/include/ecrt.h
++++ b/include/ecrt.h
+@@ -130,6 +130,8 @@
+ #include <sys/time.h> // for struct timeval
+ #endif
+ 
++#include <linux/if_ether.h> // for ETH_ALEN
++
+ /******************************************************************************
+  * Global definitions
+  *****************************************************************************/
+@@ -195,6 +197,10 @@
+  */
+ #define EC_HAVE_SYNC_TO
+ 
++/** Defined if the method ecrt_slave_config_eoe() is available.
++ */
++#define EC_HAVE_SLAVE_CONFIG_EOE
++
+ /*****************************************************************************/
+ 
+ /** End of list marker.
+@@ -1156,7 +1162,7 @@ size_t ecrt_master_send_ext(
+         ec_master_t *master /**< EtherCAT master. */
+         );
+ 
+-#if !defined(__KERNEL__) && defined(EC_RTDM) && (EC_EOE)
++#if !defined(__KERNEL__) && defined(EC_RTDM) && defined(EC_EOE)
+ 
+ /** check if there are any open eoe handlers
+  *
+@@ -1193,10 +1199,9 @@ int ecrt_master_eoe_process(
+         ec_master_t *master /**< EtherCAT master. */
+         );
+ 
+-#endif /* !defined(__KERNEL__) && defined(EC_RTDM) && (EC_EOE) */
+-
+-#ifdef EC_EOE
++#endif /* !defined(__KERNEL__) && defined(EC_RTDM) && defined(EC_EOE) */
+ 
++#if !defined(__KERNEL__) || defined(EC_EOE)
+ /** add an EOE network interface
+  *
+  * \return 0 on success else negative error code
+@@ -1216,8 +1221,7 @@ int ecrt_master_eoe_delif(
+         uint16_t alias, /**< slave alias. */
+         uint16_t posn /**< slave position. */
+         );
+-
+-#endif /* EC_EOE */
++#endif /* !defined(__KERNEL__) || defined(EC_EOE) */
+ 
+ /** Reads the current master state.
+  *
+@@ -1720,6 +1724,25 @@ void ecrt_slave_config_dc(
+         int32_t sync1_shift /**< SYNC1 shift time [ns]. */
+         );
+ 
++#if !defined(__KERNEL__) || defined(EC_EOE)
++/** Add an EoE configuration.
++ *
++ * An EoE Configuration is stored in the slave configuration and is
++ * downloaded to the slave whenever the slave is being configured by the
++ * master. This usually happens once on master activation, but can be repeated
++ * subsequently, for example after the slave's power supply failed.
++ */
++int ecrt_slave_config_eoe(
++        ec_slave_config_t *sc, /**< Slave configuration. */
++        const unsigned char mac_address[ETH_ALEN], /**< MAC Address. */
++        uint32_t ip_address, /**< IP address in network byte order. */
++        uint32_t subnet_mask, /**< Subnet mask in network byte order. */
++        uint32_t gateway, /**< (Default) Gateway in network byte order. */
++        uint32_t dns, /**< DNS Server in network byte order. */
++        const char* name /**< DNS Name. */
++        );
++#endif /* !defined(__KERNEL__) || defined(EC_EOE) */
++
+ /** Add an SDO configuration.
+  *
+  * An SDO configuration is stored in the slave configuration object and is
+diff --git a/lib/master.c b/lib/master.c
+index ec5ca325..c7af69bd 100644
+--- a/lib/master.c
++++ b/lib/master.c
+@@ -764,7 +764,7 @@ void ecrt_master_receive(ec_master_t *master)
+ 
+ /****************************************************************************/
+ 
+-#if defined(EC_RTDM) && (EC_EOE)
++#if defined(EC_RTDM) && defined(EC_EOE)
+ 
+ size_t ecrt_master_send_ext(ec_master_t *master)
+ {
+@@ -814,10 +814,9 @@ int ecrt_master_eoe_process(ec_master_t *master)
+ 
+ /****************************************************************************/
+ 
+-#ifdef EC_EOE
+-
+ int ecrt_master_eoe_addif(ec_master_t *master, uint16_t alias, uint16_t posn)
+ {
++#ifdef EC_EOE
+     int ret;
+     ec_ioctl_eoe_if_t data;
+     data.alias = alias;
+@@ -830,12 +829,17 @@ int ecrt_master_eoe_addif(ec_master_t *master, uint16_t alias, uint16_t posn)
+     }
+ 
+     return ret;
++#else
++    EC_PRINT_ERR("Failed to add EoE interface: EoE not available\n");
++    return -ENOPROTOOPT;
++#endif
+ }
+ 
+ /****************************************************************************/
+ 
+ int ecrt_master_eoe_delif(ec_master_t *master, uint16_t alias, uint16_t posn)
+ {
++#ifdef EC_EOE
+     int ret;
+     ec_ioctl_eoe_if_t data;
+     data.alias = alias;
+@@ -843,14 +847,16 @@ int ecrt_master_eoe_delif(ec_master_t *master, uint16_t alias, uint16_t posn)
+ 
+     ret = ioctl(master->fd, EC_IOCTL_EOE_DELIF, &data);
+     if (EC_IOCTL_IS_ERROR(ret)) {
+-        EC_PRINT_ERR("Failed to add EoE interface: %s\n",
++        EC_PRINT_ERR("Failed to delete EoE interface: %s\n",
+                 strerror(EC_IOCTL_ERRNO(ret)));
+     }
+ 
+     return ret;
+-}
+-
++#else
++    EC_PRINT_ERR("Failed to delete EoE interface: EoE not available\n");
++    return -ENOPROTOOPT;
+ #endif
++}
+ 
+ /****************************************************************************/
+ 
+diff --git a/lib/slave_config.c b/lib/slave_config.c
+index 8ba19389..e1f4f78b 100644
+--- a/lib/slave_config.c
++++ b/lib/slave_config.c
+@@ -437,6 +437,40 @@ int ecrt_slave_config_sdo(ec_slave_config_t *sc, uint16_t index,
+ 
+ /*****************************************************************************/
+ 
++int ecrt_slave_config_eoe(ec_slave_config_t *sc,
++        const unsigned char mac_address[ETH_ALEN],
++        uint32_t ip_address, uint32_t subnet_mask,
++        uint32_t gateway, uint32_t dns, const char* name)
++{
++#ifdef EC_EOE
++    ec_ioctl_sc_eoe_t data;
++    int ret;
++
++    data.config_index = sc->index;
++    memcpy(data.mac_address, mac_address, ETH_ALEN);
++    data.ip_address = ip_address;
++    data.subnet_mask = subnet_mask;
++    data.gateway = gateway;
++    data.dns = dns;
++    strncpy(data.name, name, sizeof(data.name));
++    data.name[sizeof(data.name)-1] = 0;
++
++    ret = ioctl(sc->master->fd, EC_IOCTL_SC_EOE, &data);
++    if (EC_IOCTL_IS_ERROR(ret)) {
++        EC_PRINT_ERR("Failed to configure EoE: %s\n",
++                     strerror(EC_IOCTL_ERRNO(ret)));
++        return -EC_IOCTL_ERRNO(ret);
++    }
++
++    return 0;
++#else
++    EC_PRINT_ERR("Failed to configure EoE: EoE not available\n");
++    return -ENOPROTOOPT;
++#endif
++}
++
++/*****************************************************************************/
++
+ int ecrt_slave_config_complete_sdo(ec_slave_config_t *sc, uint16_t index,
+         const uint8_t *sdo_data, size_t size)
+ {
+diff --git a/master/eoe_request.c b/master/eoe_request.c
+index 90b96233..11c5a903 100644
+--- a/master/eoe_request.c
++++ b/master/eoe_request.c
+@@ -69,3 +69,37 @@ void ec_eoe_request_init(
+ }
+ 
+ /*****************************************************************************/
++
++/** Copy another EoE request.
++ */
++
++void ec_eoe_request_copy(
++        ec_eoe_request_t *req, /**< EoE request. */
++        const ec_eoe_request_t *other /**< Other EoE request to copy from. */
++)
++{
++    req->mac_address_included = other->mac_address_included;
++    req->ip_address_included = other->ip_address_included;
++    req->subnet_mask_included = other->subnet_mask_included;
++    req->gateway_included = other->gateway_included;
++    req->dns_included = other->dns_included;
++    req->name_included = other->name_included;
++
++    memcpy(req->mac_address, other->mac_address, ETH_ALEN);
++    req->ip_address = other->ip_address;
++    req->subnet_mask = other->subnet_mask;
++    req->gateway = other->gateway;
++    req->dns = other->dns;
++    memcpy(req->name, other->name, EC_MAX_HOSTNAME_SIZE);
++}
++
++/*****************************************************************************/
++
++void ec_eoe_request_write(ec_eoe_request_t *req)
++{
++    req->state = EC_INT_REQUEST_QUEUED;
++    req->jiffies_sent = jiffies;
++
++    req->result = 0x0000;
++}
++
+diff --git a/master/eoe_request.h b/master/eoe_request.h
+index 85c7d193..26730cae 100644
+--- a/master/eoe_request.h
++++ b/master/eoe_request.h
+@@ -38,7 +38,7 @@
+ #define __EC_EOE_REQUEST_H__
+ 
+ #include <linux/list.h>
+-#include <linux/etherdevice.h> // ETH_ALEN
++#include <linux/if_ether.h> // ETH_ALEN
+ 
+ #include "globals.h"
+ 
+@@ -71,6 +71,8 @@ typedef struct {
+ /*****************************************************************************/
+ 
+ void ec_eoe_request_init(ec_eoe_request_t *);
++void ec_eoe_request_copy(ec_eoe_request_t *, const ec_eoe_request_t *);
++void ec_eoe_request_write(ec_eoe_request_t *);
+ 
+ /*****************************************************************************/
+ 
+diff --git a/master/fsm_slave.c b/master/fsm_slave.c
+index 9f332978..9cd1a2ad 100644
+--- a/master/fsm_slave.c
++++ b/master/fsm_slave.c
+@@ -106,6 +106,9 @@ void ec_fsm_slave_init(
+     ec_fsm_change_init(&fsm->fsm_change);
+     ec_fsm_slave_config_init(&fsm->fsm_slave_config, fsm->slave,
+             &fsm->fsm_change, &fsm->fsm_coe, &fsm->fsm_soe, &fsm->fsm_pdo);
++#ifdef EC_EOE
++    ec_fsm_slave_config_init_eoe(&fsm->fsm_slave_config, &fsm->fsm_eoe);
++#endif
+     ec_fsm_slave_scan_init(&fsm->fsm_slave_scan, fsm->slave,
+             &fsm->fsm_slave_config, &fsm->fsm_pdo);
+ }
+diff --git a/master/fsm_slave_config.c b/master/fsm_slave_config.c
+index 3383029c..bb3f899c 100755
+--- a/master/fsm_slave_config.c
++++ b/master/fsm_slave_config.c
+@@ -115,6 +115,11 @@ void ec_fsm_slave_config_state_error(ec_fsm_slave_config_t *, ec_datagram_t *);
+ 
+ void ec_fsm_slave_config_reconfigure(ec_fsm_slave_config_t *, ec_datagram_t *);
+ 
++#ifdef EC_EOE
++void ec_fsm_slave_config_state_eoe_conf_preop(ec_fsm_slave_config_t *, ec_datagram_t *);
++void ec_fsm_slave_config_enter_eoe_conf_preop(ec_fsm_slave_config_t *, ec_datagram_t *);
++#endif
++
+ /*****************************************************************************/
+ 
+ /** Constructor.
+@@ -141,6 +146,20 @@ void ec_fsm_slave_config_init(
+ 
+ /*****************************************************************************/
+ 
++#ifdef EC_EOE
++/** Constructor Extension for EoE.
++ */
++void ec_fsm_slave_config_init_eoe(
++        ec_fsm_slave_config_t *fsm, /**< slave state machine */
++        ec_fsm_eoe_t *fsm_eoe /**< EoE state machine to use. */
++        )
++{
++    fsm->fsm_eoe = fsm_eoe;
++}
++#endif
++
++/*****************************************************************************/
++
+ /** Destructor.
+  */
+ void ec_fsm_slave_config_clear(
+@@ -943,7 +962,11 @@ void ec_fsm_slave_config_enter_soe_conf_preop(
+     }
+ 
+     // No SoE configuration to be applied in PREOP
++#ifdef EC_EOE
++    ec_fsm_slave_config_enter_eoe_conf_preop(fsm, datagram);
++#else
+     ec_fsm_slave_config_enter_pdo_conf(fsm, datagram);
++#endif
+ }
+ 
+ /*****************************************************************************/
+@@ -988,9 +1011,89 @@ void ec_fsm_slave_config_state_soe_conf_preop(
+     }
+ 
+     // All PREOP IDNs are now configured.
++#ifdef EC_EOE
++    ec_fsm_slave_config_enter_eoe_conf_preop(fsm, datagram);
++#else
++    ec_fsm_slave_config_enter_pdo_conf(fsm, datagram);
++#endif
++}
++
++/*****************************************************************************/
++
++#ifdef EC_EOE
++
++/** Check for EoE configurations to be applied.
++ */
++void ec_fsm_slave_config_enter_eoe_conf_preop(
++        ec_fsm_slave_config_t *fsm, /**< slave state machine */
++        ec_datagram_t *datagram /**< Datagram to use. */
++)
++{
++    ec_slave_t *slave = fsm->slave;
++
++    if (!slave->config) {
++        ec_fsm_slave_config_enter_pdo_sync(fsm, datagram);
++        return;
++    }
++
++    // No EoE configuration to be applied?
++    if (list_empty(&slave->config->eoe_configs)) { // skip EoE configuration
++        ec_fsm_slave_config_enter_pdo_sync(fsm, datagram);
++        return;
++    }
++
++    // start EoE configuration
++    fsm->state = ec_fsm_slave_config_state_eoe_conf_preop;
++    fsm->eoe_request = list_entry(fsm->slave->config->eoe_configs.next,
++            ec_eoe_request_t, list);
++    ec_eoe_request_copy(&fsm->eoe_request_copy, fsm->eoe_request);
++    ec_eoe_request_write(&fsm->eoe_request_copy);
++    ec_fsm_eoe_set_ip_param(fsm->fsm_eoe, fsm->slave, &fsm->eoe_request_copy);
++    ec_fsm_eoe_exec(fsm->fsm_eoe, datagram); // execute immediately
++}
++
++/*****************************************************************************/
++
++/** Slave configuration state: EOE_CONF.
++ */
++void ec_fsm_slave_config_state_eoe_conf_preop(
++        ec_fsm_slave_config_t *fsm, /**< slave state machine */
++        ec_datagram_t *datagram /**< Datagram to use. */
++)
++{
++    if (ec_fsm_eoe_exec(fsm->fsm_eoe, datagram)) {
++        return;
++    }
++
++    if (!ec_fsm_eoe_success(fsm->fsm_eoe)) {
++        EC_SLAVE_ERR(fsm->slave, "EoE configuration failed.\n");
++        fsm->slave->error_flag = 1;
++        fsm->state = ec_fsm_slave_config_state_error;
++        return;
++    }
++
++    if (!fsm->slave->config) { // config removed in the meantime
++        ec_fsm_slave_config_reconfigure(fsm, datagram);
++        return;
++    }
++
++    // Another EoE to configure?
++    if (fsm->eoe_request->list.next != &fsm->slave->config->eoe_configs) {
++        fsm->eoe_request = list_entry(fsm->eoe_request->list.next,
++                ec_eoe_request_t, list);
++        ec_eoe_request_copy(&fsm->eoe_request_copy, fsm->eoe_request);
++        ec_eoe_request_write(&fsm->eoe_request_copy);
++        ec_fsm_eoe_set_ip_param(fsm->fsm_eoe, fsm->slave, &fsm->eoe_request_copy);
++        ec_fsm_eoe_exec(fsm->fsm_eoe, datagram); // execute immediately
++        return;
++    }
++
++    // All EoE are now configured.
+     ec_fsm_slave_config_enter_pdo_conf(fsm, datagram);
+ }
+ 
++#endif
++
+ /*****************************************************************************/
+ 
+ /** PDO_CONF entry function.
+diff --git a/master/fsm_slave_config.h b/master/fsm_slave_config.h
+index 86c3ed64..4dd349ea 100644
+--- a/master/fsm_slave_config.h
++++ b/master/fsm_slave_config.h
+@@ -57,6 +57,9 @@ struct ec_fsm_slave_config
+     ec_fsm_change_t *fsm_change; /**< State change state machine. */
+     ec_fsm_coe_t *fsm_coe; /**< CoE state machine. */
+     ec_fsm_soe_t *fsm_soe; /**< SoE state machine. */
++#ifdef EC_EOE
++    ec_fsm_eoe_t *fsm_eoe; /**< EoE state machine. */
++#endif
+     ec_fsm_pdo_t *fsm_pdo; /**< PDO configuration state machine. */
+ 
+     ec_slave_t *slave; /**< Slave the FSM runs on. */
+@@ -66,6 +69,10 @@ struct ec_fsm_slave_config
+     ec_sdo_request_t request_copy; /**< Copied SDO request. */
+     ec_soe_request_t *soe_request; /**< SDO request for SDO configuration. */
+     ec_soe_request_t soe_request_copy; /**< Copied SDO request. */
++#ifdef EC_EOE
++    ec_eoe_request_t *eoe_request; /**< EoE request for EoE configuration. */
++    ec_eoe_request_t eoe_request_copy; /**< Copied EoE request. */
++#endif
+     unsigned long last_diff_ms; /**< For sync reporting. */
+     unsigned long jiffies_start; /**< For timeout calculations. */
+     unsigned int take_time; /**< Store jiffies after datagram reception. */
+@@ -75,6 +82,9 @@ struct ec_fsm_slave_config
+ 
+ void ec_fsm_slave_config_init(ec_fsm_slave_config_t *, ec_slave_t *,
+         ec_fsm_change_t *, ec_fsm_coe_t *, ec_fsm_soe_t *, ec_fsm_pdo_t *);
++#ifdef EC_EOE
++void ec_fsm_slave_config_init_eoe(ec_fsm_slave_config_t *, ec_fsm_eoe_t *);
++#endif
+ void ec_fsm_slave_config_clear(ec_fsm_slave_config_t *);
+ 
+ void ec_fsm_slave_config_start(ec_fsm_slave_config_t *);
+diff --git a/master/ioctl.c b/master/ioctl.c
+index 922a14f7..c32b8e65 100755
+--- a/master/ioctl.c
++++ b/master/ioctl.c
+@@ -3314,6 +3314,44 @@ static ATTRIBUTES int ec_ioctl_sc_sdo(
+ 
+ /*****************************************************************************/
+ 
++#ifdef EC_EOE
++/** Configures EoE.
++ *
++ * \return Zero on success, otherwise a negative error code.
++ */
++static ATTRIBUTES int ec_ioctl_sc_eoe(
++        ec_master_t *master, /**< EtherCAT master. */
++        void *arg, /**< ioctl() argument. */
++        ec_ioctl_context_t *ctx /**< Private data structure of file handle. */
++)
++{
++    ec_ioctl_sc_eoe_t data;
++    ec_slave_config_t *sc;
++
++    if (unlikely(!ctx->requested))
++        return -EPERM;
++
++    if (copy_from_user(&data, (void __user *) arg, sizeof(data)))
++    return -EFAULT;
++
++    if (ec_lock_down_interruptible(&master->master_sem))
++        return -EINTR;
++
++    if (!(sc = ec_master_get_config(master, data.config_index))) {
++        ec_lock_up(&master->master_sem);
++        return -ENOENT;
++    }
++
++    ec_lock_up(&master->master_sem); /** \todo sc could be invalidated */
++
++    return ecrt_slave_config_eoe(sc, data.mac_address, data.ip_address,
++                data.subnet_mask, data.gateway, data.dns, data.name);
++
++}
++#endif
++
++/*****************************************************************************/
++
+ /** Set the emergency ring buffer size.
+  *
+  * \return Zero on success, otherwise a negative error code.
+@@ -6317,6 +6355,13 @@ long EC_IOCTL(
+             }
+             ret = ec_ioctl_eoe_delif(master, arg, ctx);
+             break;
++        case EC_IOCTL_SC_EOE:
++            if (!ctx->writable) {
++                ret = -EPERM;
++                break;
++            }
++            ret = ec_ioctl_sc_eoe(master, arg, ctx);
++            break;
+ #endif
+         case EC_IOCTL_MBOX_GATEWAY:
+             if (!ctx->writable) {
+diff --git a/master/ioctl.h b/master/ioctl.h
+index 5e2ef90c..54e4b76e 100644
+--- a/master/ioctl.h
++++ b/master/ioctl.h
+@@ -39,6 +39,10 @@
+ 
+ #include <linux/ioctl.h>
+ 
++#ifdef EC_EOE
++#include <linux/if_ether.h>
++#endif
++
+ #include "globals.h"
+ 
+ /*****************************************************************************/
+@@ -175,7 +179,7 @@
+ #define EC_IOCTL_RT_SLAVE_REQUESTS     EC_IOW(0x6b, uint32_t)
+ #define EC_IOCTL_EXEC_SLAVE_REQUESTS    EC_IO(0x6c)
+ 
+-#if defined(EC_RTDM) && (EC_EOE)
++#if defined(EC_RTDM) && defined(EC_EOE)
+ #define EC_IOCTL_EOE_IS_OPEN            EC_IO(0x6d)
+ #define EC_IOCTL_EOE_PROCESS            EC_IO(0x6e)
+ #define EC_IOCTL_SEND_EXT               EC_IO(0x6f)
+@@ -198,6 +202,10 @@
+ #define EC_IOCTL_SOE_REQUEST_DATA     EC_IOWR(0x84, ec_ioctl_soe_request_t)
+ #define EC_IOCTL_SOE_REQUEST_IDN      EC_IOWR(0x85, ec_ioctl_soe_request_t)
+ 
++#ifdef EC_EOE
++#define EC_IOCTL_SC_EOE               EC_IOW(0x86, ec_ioctl_sc_eoe_t)
++#endif
++
+ /*****************************************************************************/
+ 
+ #define EC_IOCTL_STRING_SIZE 64
+@@ -670,13 +678,6 @@ typedef struct {
+ 
+ /*****************************************************************************/
+ 
+-#define EC_ETH_ALEN 6
+-#ifdef ETH_ALEN
+-#if ETH_ALEN != EC_ETH_ALEN
+-#error Ethernet address length mismatch
+-#endif
+-#endif
+-
+ #ifdef EC_EOE
+ typedef struct {
+     // input
+@@ -689,7 +690,7 @@ typedef struct {
+     uint8_t dns_included;
+     uint8_t name_included;
+ 
+-    unsigned char mac_address[EC_ETH_ALEN];
++    unsigned char mac_address[ETH_ALEN];
+     uint32_t ip_address;
+     uint32_t subnet_mask;
+     uint32_t gateway;
+@@ -795,6 +796,21 @@ typedef struct {
+ 
+ /*****************************************************************************/
+ 
++#ifdef EC_EOE
++typedef struct {
++    // inputs
++    uint32_t config_index;
++    unsigned char mac_address[ETH_ALEN];
++    uint32_t ip_address;
++    uint32_t subnet_mask;
++    uint32_t gateway;
++    uint32_t dns;
++    char name[EC_MAX_HOSTNAME_SIZE];
++} ec_ioctl_sc_eoe_t;
++#endif
++
++/*****************************************************************************/
++
+ typedef struct {
+     // inputs
+     uint32_t domain_index;
+diff --git a/master/slave_config.c b/master/slave_config.c
+index ac40b277..67638052 100755
+--- a/master/slave_config.c
++++ b/master/slave_config.c
+@@ -92,6 +92,9 @@ void ec_slave_config_init(
+     INIT_LIST_HEAD(&sc->voe_handlers);
+     INIT_LIST_HEAD(&sc->soe_configs);
+     INIT_LIST_HEAD(&sc->soe_requests);
++#ifdef EC_EOE
++    INIT_LIST_HEAD(&sc->eoe_configs);
++#endif
+     ec_coe_emerg_ring_init(&sc->emerg_ring, sc);
+ }
+ 
+@@ -111,6 +114,9 @@ void ec_slave_config_clear(
+     ec_voe_handler_t *voe, *next_voe;
+     ec_reg_request_t *reg, *next_reg;
+     ec_soe_request_t *soe, *next_soe;
++#ifdef EC_EOE
++    ec_eoe_request_t *eoe, *next_eoe;
++#endif
+ 
+     ec_slave_config_detach(sc);
+ 
+@@ -167,6 +173,14 @@ void ec_slave_config_clear(
+         kfree(soe);
+     }
+ 
++#ifdef EC_EOE
++    // free all EoE configurations
++    list_for_each_entry_safe(eoe, next_eoe, &sc->eoe_configs, list) {
++        list_del(&eoe->list);
++        kfree(eoe);
++    }
++#endif
++
+     ec_coe_emerg_ring_clear(&sc->emerg_ring);
+ }
+ 
+@@ -1539,6 +1553,69 @@ int ecrt_slave_config_idn(ec_slave_config_t *sc, uint8_t drive_no,
+ 
+ /*****************************************************************************/
+ 
++#ifdef EC_EOE
++int ecrt_slave_config_eoe(ec_slave_config_t *sc,
++        const unsigned char mac_address[ETH_ALEN],
++        uint32_t ip_address, uint32_t subnet_mask,
++        uint32_t gateway, uint32_t dns, const char* name)
++{
++    ec_slave_t *slave = sc->slave;
++    ec_eoe_request_t *req;
++    int cnt;
++
++    EC_CONFIG_DBG(sc, 1, "%s(sc = 0x%p, mac = %pM, ip = %pI4, "
++                         "netmask = %pI4, gw = %pI4, dns = %pI4, "
++                         "name = %s)\n",
++                  __func__, sc, mac_address, &ip_address, &subnet_mask,
++                  &gateway, &dns, name);
++
++    if (slave && slave->sii_image && !(slave->sii_image->sii.mailbox_protocols & EC_MBOX_EOE)) {
++        EC_CONFIG_WARN(sc, "Attached slave does not support EoE!\n");
++    }
++
++    if (!(req = (ec_eoe_request_t *)
++            kmalloc(sizeof(ec_eoe_request_t), GFP_KERNEL))) {
++        EC_CONFIG_ERR(sc, "Failed to allocate memory for"
++                          " EoE configuration!\n");
++        return -ENOMEM;
++    }
++
++    ec_eoe_request_init(req);
++
++    memcpy(req->mac_address, mac_address, ETH_ALEN);
++    cnt = 0;
++    req->mac_address_included = 0;
++    while (req->mac_address_included == 0 && cnt < ETH_ALEN) {
++        req->mac_address_included = (mac_address[cnt] != 0) ? 1 : 0;
++        ++cnt;
++    }
++
++    req->ip_address = ip_address;
++    req->ip_address_included = ip_address != 0;
++
++    req->subnet_mask = subnet_mask;
++    req->subnet_mask_included = subnet_mask != 0;
++
++    req->gateway = gateway;
++    req->gateway_included = gateway != 0;
++
++    req->dns = dns;
++    req->dns_included = dns != 0;
++
++    strncpy(req->name, name, sizeof(req->name));
++    req->name[sizeof(req->name)-1] = 0;
++    req->name_included = req->name[0] != 0;
++
++    ec_lock_down(&sc->master->master_sem);
++    list_add_tail(&req->list, &sc->eoe_configs);
++    ec_lock_up(&sc->master->master_sem);
++
++    return 0;
++}
++#endif
++
++/*****************************************************************************/
++
+ /** \cond */
+ 
+ EXPORT_SYMBOL(ecrt_slave_config_sync_manager);
+@@ -1566,6 +1643,9 @@ EXPORT_SYMBOL(ecrt_slave_config_create_voe_handler);
+ EXPORT_SYMBOL(ecrt_slave_config_create_reg_request);
+ EXPORT_SYMBOL(ecrt_slave_config_state);
+ EXPORT_SYMBOL(ecrt_slave_config_idn);
++#ifdef EC_EOE
++EXPORT_SYMBOL(ecrt_slave_config_eoe);
++#endif
+ 
+ /** \endcond */
+ 
+diff --git a/master/slave_config.h b/master/slave_config.h
+index 2f449061..dbc179b5 100755
+--- a/master/slave_config.h
++++ b/master/slave_config.h
+@@ -149,6 +149,9 @@ struct ec_slave_config {
+     struct list_head reg_requests; /**< List of register requests. */
+     struct list_head soe_configs; /**< List of SoE configurations. */
+     struct list_head soe_requests; /**< List of SOE requests. */
++#ifdef EC_EOE
++    struct list_head eoe_configs; /**< List of EoE configurations. */
++#endif
+ 
+     ec_coe_emerg_ring_t emerg_ring; /**< CoE emergency ring buffer. */
+ };
+diff --git a/tool/CommandIp.cpp b/tool/CommandIp.cpp
+index 21314fce..9e958348 100644
+--- a/tool/CommandIp.cpp
++++ b/tool/CommandIp.cpp
+@@ -157,11 +157,11 @@ void CommandIp::execute(const StringVector &args)
+ 
+ /*****************************************************************************/
+ 
+-void CommandIp::parseMac(unsigned char mac[EC_ETH_ALEN], const string &str)
++void CommandIp::parseMac(unsigned char mac[ETH_ALEN], const string &str)
+ {
+     unsigned int pos = 0;
+ 
+-    for (unsigned int i = 0; i < EC_ETH_ALEN; i++) {
++    for (unsigned int i = 0; i < ETH_ALEN; i++) {
+         if (pos + 2 > str.size()) {
+             stringstream err;
+             err << "Incomplete MAC address!";
+-- 
+2.34.1
+
