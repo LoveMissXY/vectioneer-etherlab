@@ -693,15 +693,6 @@ diff --git a/master/module.c b/master/module.c
 index 0d56fad..1adf939 100644
 --- a/master/module.c
 +++ b/master/module.c
-@@ -113,7 +113,7 @@ int __init ec_init_module(void)
- {
-     int i, ret = 0;
- 
--    EC_INFO("Master driver %s\n", EC_MASTER_VERSION);
-+    EC_INFO("Master driver %s (with SOE requests)\n", EC_MASTER_VERSION);
- 
-     ec_lock_init(&master_sem);
- 
 @@ -168,7 +168,7 @@ int __init ec_init_module(void)
          if (ret)
              goto out_free_masters;
