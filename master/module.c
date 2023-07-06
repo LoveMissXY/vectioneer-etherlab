@@ -113,7 +113,7 @@ int __init ec_init_module(void)
 {
     int i, ret = 0;
 
-    EC_INFO("Master driver %s (with SOE requests)\n", EC_MASTER_VERSION);
+    EC_INFO("Master driver %s\n", EC_MASTER_VERSION);
 
     ec_lock_init(&master_sem);
 
