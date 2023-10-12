@@ -1,0 +1,37 @@
+From 572257e2f91ec89eb306eb81a1637f66428156a9 Mon Sep 17 00:00:00 2001
+From: Mark Verrijt <mark.verrijt@vectioneer.com>
+Date: Thu, 12 Oct 2023 13:21:14 +0200
+Subject: [PATCH 1/2] Freezer update for kernel 6.1
+
+---
+ master/master.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/master/master.c b/master/master.c
+index a354ef56..be6b4151 100644
+--- a/master/master.c
++++ b/master/master.c
+@@ -1784,12 +1784,19 @@ static ktime_t ec_master_nanosleep_timer(struct hrtimer_sleeper *t, ktime_t idea
+     hrtimer_set_expires(&t->timer, ideal_time);
+ 
+     do {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0)
++        set_current_state(TASK_INTERRUPTIBLE|TASK_FREEZABLE);
++        hrtimer_start_expires(&t->timer, HRTIMER_MODE_ABS);
++
++        if (likely(t->task))
++            schedule();
++#else
+         set_current_state(TASK_INTERRUPTIBLE);
+         hrtimer_start_expires(&t->timer, HRTIMER_MODE_ABS);
+ 
+         if (likely(t->task))
+             freezable_schedule();
+-
++#endif
+         hrtimer_cancel(&t->timer);
+ 
+     } while (t->task && !signal_pending(current));
+-- 
+2.34.1
+
