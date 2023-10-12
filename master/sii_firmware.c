@@ -74,7 +74,9 @@ static int sii_request_firmware_direct(
     struct dentry   *dentry = NULL;
     struct firmware *firmware;
     umode_t          permission;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
     mm_segment_t     old_fs;
+#endif
     loff_t           pos;
     char             pathname[strlen(filename) + sizeof(EC_SII_DIR)];
 
