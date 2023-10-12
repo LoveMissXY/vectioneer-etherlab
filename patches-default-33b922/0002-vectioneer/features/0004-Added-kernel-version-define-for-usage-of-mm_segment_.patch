@@ -1,0 +1,27 @@
+From 7cd4e355c332ae5113e03e10bb47ce10bb9dcfc0 Mon Sep 17 00:00:00 2001
+From: Mark Verrijt <mark.verrijt@vectioneer.com>
+Date: Thu, 12 Oct 2023 13:33:08 +0200
+Subject: [PATCH 2/2] Added kernel version define for usage of mm_segment_t
+ (old_fs)
+
+---
+ master/sii_firmware.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/master/sii_firmware.c b/master/sii_firmware.c
+index 950a2082..0ae79a02 100644
+--- a/master/sii_firmware.c
++++ b/master/sii_firmware.c
+@@ -74,7 +74,9 @@ static int sii_request_firmware_direct(
+     struct dentry   *dentry = NULL;
+     struct firmware *firmware;
+     umode_t          permission;
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+     mm_segment_t     old_fs;
++#endif
+     loff_t           pos;
+     char             pathname[strlen(filename) + sizeof(EC_SII_DIR)];
+ 
+-- 
+2.34.1
+

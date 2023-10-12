@@ -202,3 +202,5 @@
 
 ####---- Vetioneer (2) ----####
 0002-vectioneer/features/0002-EoE-slave-config-and-EoE-improvements.patch
+0002-vectioneer/features/0003-Freezer-update-for-kernel-6.1.patch
+0002-vectioneer/features/0004-Added-kernel-version-define-for-usage-of-mm_segment_.patch
