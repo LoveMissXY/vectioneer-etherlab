@@ -199,6 +199,7 @@
 ####---- Others ----####
 0005-others/gitlab.com.beckhoff.ccat.git/0001-convert-ccat-to-mfd.patch
 0005-others/gitlab.com.igh-vh.ethercat.git/0001-patched-igb-5.15.patch
+0005-others/gitlab.com.igh-vh.ethercat.git/0002-igb-and-8139too-drivers-for-6.1.patch
 
 ####---- Vetioneer (2) ----####
 0002-vectioneer/features/0002-EoE-slave-config-and-EoE-improvements.patch
