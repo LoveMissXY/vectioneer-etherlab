@@ -219,6 +219,8 @@ int ec_eoe_init(
     unsigned char lo_mac[ETH_ALEN] = {0};
     unsigned int use_master_mac = 0;
 
+    unsigned char eoe_mac_addr[ETH_ALEN] = {0};
+
     eoe->master = master;
     eoe->slave = NULL;
     eoe->have_mbox_lock = 0;
@@ -284,6 +286,9 @@ int ec_eoe_init(
     eoe->dev->get_stats = ec_eoedev_stats;
 #endif
 
+    // make copy of eoe->dev->dev_addr
+    memcpy(eoe_mac_addr, eoe->dev->dev_addr, ETH_ALEN);
+
     // First check if the MAC address assigned to the master is globally
     // unique
     if ((master->devices[EC_DEVICE_MAIN].dev->dev_addr[0] & 0x02) !=
@@ -317,9 +322,9 @@ int ec_eoe_init(
                 EC_MASTER_INFO(master, "%s MAC address derived from"
                         " NIC part of %s MAC address\n",
                     eoe->dev->name, dev->name);
-                eoe->dev->dev_addr[1] = dev->dev_addr[3];
-                eoe->dev->dev_addr[2] = dev->dev_addr[4];
-                eoe->dev->dev_addr[3] = dev->dev_addr[5];
+                eoe_mac_addr[1] = dev->dev_addr[3];
+                eoe_mac_addr[2] = dev->dev_addr[4];
+                eoe_mac_addr[3] = dev->dev_addr[5];
             }
             else {
                 use_master_mac = 1;
@@ -332,21 +337,28 @@ int ec_eoe_init(
                     " from NIC part of %s MAC address\n",
                 eoe->dev->name,
                 master->devices[EC_DEVICE_MAIN].dev->name);
-            eoe->dev->dev_addr[1] =
+            eoe_mac_addr[1] =
                 master->devices[EC_DEVICE_MAIN].dev->dev_addr[3];
-            eoe->dev->dev_addr[2] =
+            eoe_mac_addr[2] =
                 master->devices[EC_DEVICE_MAIN].dev->dev_addr[4];
-            eoe->dev->dev_addr[3] =
+            eoe_mac_addr[3] =
                 master->devices[EC_DEVICE_MAIN].dev->dev_addr[5];
         }
-        eoe->dev->dev_addr[0] = 0x02;
+        eoe_mac_addr[0] = 0x02;
         if (alias) {
-            eoe->dev->dev_addr[4] = (uint8_t)(alias >> 8);
-            eoe->dev->dev_addr[5] = (uint8_t)(alias);
+            eoe_mac_addr[4] = (uint8_t)(alias >> 8);
+            eoe_mac_addr[5] = (uint8_t)(alias);
         } else {
-            eoe->dev->dev_addr[4] = (uint8_t)(ring_position >> 8);
-            eoe->dev->dev_addr[5] = (uint8_t)(ring_position);
+            eoe_mac_addr[4] = (uint8_t)(ring_position >> 8);
+            eoe_mac_addr[5] = (uint8_t)(ring_position);
         }
+    
+        // copy (adapted) eoe->dev->dev_addr back
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 17, 0)
+        memcpy(eoe->dev->dev_addr, eoe_mac_addr, ETH_ALEN);
+#else
+        dev_addr_set(eoe->dev, eoe_mac_addr);
+#endif
     }
 
     // initialize private data
@@ -976,7 +988,11 @@ void ec_eoe_state_rx_fetch_data(ec_eoe_t *eoe /**< EoE handler */)
         eoe->rx_skb->dev = eoe->dev;
         eoe->rx_skb->protocol = eth_type_trans(eoe->rx_skb, eoe->dev);
         eoe->rx_skb->ip_summed = CHECKSUM_UNNECESSARY;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 18, 0)
         if (netif_rx_ni(eoe->rx_skb)) {
+#else
+        if (netif_rx(eoe->rx_skb)) {
+#endif
             EC_SLAVE_WARN(eoe->slave, "EoE RX netif_rx failed.\n");
         }
         eoe->rx_skb = NULL;
