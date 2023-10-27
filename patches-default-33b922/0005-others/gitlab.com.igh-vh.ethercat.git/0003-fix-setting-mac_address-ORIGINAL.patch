@@ -1,0 +1,116 @@
+From d301cbb992e80218735b81c73d49fec705f91d08 Mon Sep 17 00:00:00 2001
+From: Bjarne von Horn <bjarne.von.horn@rwth-aachen.de>
+Date: Sun, 1 May 2022 16:39:10 +0200
+Subject: [PATCH] Fix setting mac_address
+
+eoe->dev->dev_addr is read_only in 5.17.0
+using eth_hw_addr_set instead
+---
+ devices/ccat/netdev.c | 10 ++++++++++
+ devices/generic.c     |  4 ++++
+ master/debug.c        |  4 ++++
+ master/ethernet.c     | 18 ++++++++++++++----
+ 4 files changed, 32 insertions(+), 4 deletions(-)
+
+diff --git a/devices/ccat/netdev.c b/devices/ccat/netdev.c
+index 5ff1159e..44d83607 100644
+--- a/devices/ccat/netdev.c
++++ b/devices/ccat/netdev.c
+@@ -894,8 +894,18 @@ static int ccat_eth_init_netdev(struct ccat_eth_priv *priv)
+ 	int status;
+ 
+ 	/* init netdev with MAC and stack callbacks */
++
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
++	u8 mac_addr[ETH_ALEN];
++
++	if (priv->netdev->addr_len != ETH_ALEN)
++		return -EFAULT;
++	memcpy_fromio(mac_addr, priv->reg.mii + 8, ETH_ALEN);
++	eth_hw_addr_set(priv->netdev, mac_addr);
++#else
+ 	memcpy_fromio(priv->netdev->dev_addr, priv->reg.mii + 8,
+ 		      priv->netdev->addr_len);
++#endif
+ 	priv->netdev->netdev_ops = &ccat_eth_netdev_ops;
+ 
+ 	/* use as EtherCAT device? */
+diff --git a/devices/generic.c b/devices/generic.c
+index 0feab284..4d4d9bbd 100644
+--- a/devices/generic.c
++++ b/devices/generic.c
+@@ -255,7 +255,11 @@ int ec_gen_device_offer(
+     int ret = 0;
+ 
+     dev->used_netdev = desc->netdev;
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
++    eth_hw_addr_set(dev->netdev, desc->dev_addr);
++#else
+     memcpy(dev->netdev->dev_addr, desc->dev_addr, ETH_ALEN);
++#endif
+ 
+     dev->ecdev = ecdev_offer(dev->netdev, ec_gen_poll, THIS_MODULE);
+     if (dev->ecdev) {
+diff --git a/master/debug.c b/master/debug.c
+index ad5f90eb..b4bfc442 100644
+--- a/master/debug.c
++++ b/master/debug.c
+@@ -134,7 +134,11 @@ void ec_debug_register(
+     ec_debug_unregister(dbg);
+ 
+     // use the Ethernet address of the physical device for the debug device
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
++    eth_hw_addr_set(dbg->dev, net_dev->dev_addr);
++#else
+     memcpy(dbg->dev->dev_addr, net_dev->dev_addr, ETH_ALEN);
++#endif
+ 
+     // connect the net_device to the kernel
+     if ((result = register_netdev(dbg->dev))) {
+diff --git a/master/ethernet.c b/master/ethernet.c
+index cf9cc0cc..ff2ab45c 100644
+--- a/master/ethernet.c
++++ b/master/ethernet.c
+@@ -107,8 +107,9 @@ int ec_eoe_init(
+         )
+ {
+     ec_eoe_t **priv;
+-    int i, ret = 0;
++    int ret = 0;
+     char name[EC_DATAGRAM_NAME_SIZE];
++    u8 mac_addr[ETH_ALEN] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55};
+ 
+     eoe->slave = slave;
+ 
+@@ -171,8 +172,11 @@ int ec_eoe_init(
+     eoe->dev->get_stats = ec_eoedev_stats;
+ #endif
+ 
+-    for (i = 0; i < ETH_ALEN; i++)
+-        eoe->dev->dev_addr[i] = i | (i << 4);
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
++    eth_hw_addr_set(eoe->dev, mac_addr);
++#else
++    memcpy(eoe->dev->dev_addr, mac_addr, sizeof(mac_addr));
++#endif
+ 
+     // initialize private data
+     priv = netdev_priv(eoe->dev);
+@@ -195,7 +199,13 @@ int ec_eoe_init(
+     }
+ 
+     // make the last address octet unique
+-    eoe->dev->dev_addr[ETH_ALEN - 1] = (uint8_t) eoe->dev->ifindex;
++    mac_addr[ETH_ALEN - 1] = (uint8_t) eoe->dev->ifindex;
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
++    eth_hw_addr_set(eoe->dev, mac_addr);
++#else
++    memcpy(eoe->dev->dev_addr, mac_addr, sizeof(mac_addr));
++#endif
++
+     return 0;
+ 
+  out_free:
+-- 
+GitLab
+

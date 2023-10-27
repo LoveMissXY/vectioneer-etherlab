@@ -207,3 +207,5 @@
 0002-vectioneer/features/0004-Added-kernel-version-define-for-usage-of-mm_segment_.patch
 0002-vectioneer/features/0005-EoE-fixes-for-newer-kernel-versions.patch
 
+####---- Others (2) ----####
+0005-others/gitlab.com.igh-vh.ethercat.git/0003-fix-setting-mac_address-ADAPTED.patch
