@@ -3286,6 +3286,7 @@ int ecrt_master(ec_master_t *master, ec_master_info_t *master_info)
     master_info->link_up = master->devices[EC_DEVICE_MAIN].link_state;
     master_info->scan_busy = master->scan_busy;
     master_info->app_time = master->app_time;
+    memcpy(master_info->address, master->macs[EC_DEVICE_MAIN], sizeof(master_info->address));
     return 0;
 }
 

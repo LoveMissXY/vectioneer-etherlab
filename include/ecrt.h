@@ -358,6 +358,7 @@ typedef struct {
    unsigned int link_up : 1; /**< \a true, if the network link is up. */
    uint8_t scan_busy; /**< \a true, while the master is scanning the bus */
    uint64_t app_time; /**< Application time. */
+   uint8_t address[6]; /**< Address. */
 } ec_master_info_t;
 
 /*****************************************************************************/
